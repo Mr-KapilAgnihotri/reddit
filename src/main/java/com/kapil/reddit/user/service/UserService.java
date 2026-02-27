@@ -1,9 +1,9 @@
-package com.kapil.reddit.service;
+package com.kapil.reddit.user.service;
 
-import com.kapil.reddit.domain.User;
-import com.kapil.reddit.dto.CreateUserRequest;
-import com.kapil.reddit.dto.UserResponse;
-import com.kapil.reddit.repository.UserRepository;
+import com.kapil.reddit.user.domain.User;
+import com.kapil.reddit.user.dto.CreateUserRequest;
+import com.kapil.reddit.user.dto.UserResponse;
+import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;

@@ -1,4 +1,4 @@
-package com.kapil.reddit.dto;
+package com.kapil.reddit.user.dto;
 
 import lombok.Builder;
 import lombok.Data;

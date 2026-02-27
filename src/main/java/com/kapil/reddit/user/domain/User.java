@@ -1,4 +1,4 @@
-package com.kapil.reddit.domain;
+package com.kapil.reddit.user.domain;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
