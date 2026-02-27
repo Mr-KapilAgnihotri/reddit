@@ -1,5 +1,6 @@
 package com.kapil.reddit.user.service;
 
+import com.kapil.reddit.common.exception.BusinessException;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.dto.CreateUserRequest;
 import com.kapil.reddit.user.dto.UserResponse;
@@ -17,11 +18,11 @@ public class UserService {
     public UserResponse createUser(CreateUserRequest request) {
 
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new RuntimeException("Username already exists");
+            throw new BusinessException("Username already exists");
         }
 
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already exists");
+            throw new BusinessException("Email already exists");
         }
 
         String hashedPassword= passwordEncoder.encode(request.getPassword());
