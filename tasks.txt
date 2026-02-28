@@ -44,3 +44,36 @@ Password reset via email token
 Phase 8
 
 2FA (TOTP based — Google Authenticator style)
+
+
+now current task
+Convert roles to real authorities
+
+Protect endpoints by role
+
+Add @PreAuthorize usage
+
+Enable method-level security
+
+what we have done till now
+Modular Monolith
+
+User module
+
+Auth module
+
+Argon2 password hashing
+
+Validation layer
+
+Global exception handling
+
+JWT login
+
+JWT filter
+
+Stateless security
+
+Protected endpoints
+
+Method security enabled (@EnableMethodSecurity)

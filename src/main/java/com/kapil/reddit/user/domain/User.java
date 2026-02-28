@@ -5,6 +5,8 @@ import jakarta.persistence.Table;
 import lombok.*;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Entity
 @Table(name = "users")
@@ -29,10 +31,6 @@ public class User {
     private String passwordHash;
 
     @Builder.Default
-    @Column(nullable = false)
-    private String role = "USER";
-
-    @Builder.Default
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
@@ -46,6 +44,15 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+            name = "user_roles",
+            joinColumns = @JoinColumn(name = "user_id"),
+            inverseJoinColumns = @JoinColumn(name = "role_id")
+    )
+    private Set<Role> roles = new HashSet<>();
+
     @PrePersist
     public void onCreate() {
         this.createdAt = OffsetDateTime.now();
@@ -56,5 +63,8 @@ public class User {
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
     }
+
+
+
 
 }
