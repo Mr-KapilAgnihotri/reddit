@@ -1,0 +1,46 @@
+Login endpoint
+
+Password verification
+
+JWT token generation
+
+JWT validation filter
+
+Securing endpoints
+
+Stateless security (no sessions)
+
+We will use:
+
+JWT (stateless authentication)
+
+HMAC SHA256 signing
+
+Access token only (for now)
+
+No refresh token yet (Phase 2 later)
+Phase 5
+
+JWT access token
+
+Stateless security
+
+Protect endpoints
+
+Phase 6
+
+Refresh tokens
+
+Token storage table
+
+Token revocation
+
+Phase 7
+
+Email verification on signup
+
+Password reset via email token
+
+Phase 8
+
+2FA (TOTP based — Google Authenticator style)
