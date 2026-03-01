@@ -32,5 +32,16 @@ public class UserController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/admin/ping")
+    @PreAuthorize("hasRole('ADMIN')")
+    public String adminPing() {
+        return "Admin access granted";
+    }
+
+    @GetMapping("/user/ping")
+    @PreAuthorize("hasRole('USER')")
+    public String userPing() {
+        return "User access granted";
+    }
 
 }

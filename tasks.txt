@@ -1,3 +1,5 @@
+##docker exec -it reddit_pg psql -U postgres -d reddit_clone
+
 Login endpoint
 
 Password verification
@@ -77,3 +79,33 @@ Stateless security
 Protected endpoints
 
 Method security enabled (@EnableMethodSecurity)
+
+We will build in clean steps:
+
+Step 1
+
+Create RefreshToken entity
+
+Step 2
+
+Create Flyway migration V3
+
+Step 3
+
+Create RefreshTokenRepository
+
+Step 4
+
+Modify login → issue refresh token
+
+Step 5
+
+Create refresh endpoint
+
+Step 6
+
+Implement rotation
+
+Step 7
+
+Implement logout
