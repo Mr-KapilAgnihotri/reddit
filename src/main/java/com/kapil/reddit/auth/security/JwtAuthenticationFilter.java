@@ -42,12 +42,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String email = jwtService.extractEmail(token);
-        List<String> roles = jwtService.extractRoles(token);
+       /* List<String> roles = jwtService.extractRoles(token);
 
         List<SimpleGrantedAuthority> authorities =
                 roles.stream()
                         .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
                         .toList();
+        */
+
+        List<String> permissions = jwtService.extractPermissions(token);
+
+        List<SimpleGrantedAuthority> authorities =
+                permissions.stream()
+                        .map(SimpleGrantedAuthority::new)
+                        .toList();
+
 
         UsernamePasswordAuthenticationToken authToken =
                 new UsernamePasswordAuthenticationToken(

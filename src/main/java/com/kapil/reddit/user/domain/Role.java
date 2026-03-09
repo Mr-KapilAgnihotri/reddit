@@ -1,11 +1,12 @@
 package com.kapil.reddit.user.domain;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
+import java.util.HashSet;
+import java.util.Set;
+
+@Builder
 @Entity
 @Table(name = "roles")
 @Getter
@@ -20,4 +21,13 @@ public class Role {
 
     @Column(unique = true, nullable = false)
     private String name;
+
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+            name = "role_permissions",
+            joinColumns = @JoinColumn(name = "role_id"),
+            inverseJoinColumns = @JoinColumn(name = "permission_id")
+    )
+    private Set<Permission> permissions = new HashSet<>();
 }

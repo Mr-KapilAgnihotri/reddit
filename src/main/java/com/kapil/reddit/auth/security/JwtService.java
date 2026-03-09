@@ -1,5 +1,6 @@
 package com.kapil.reddit.auth.security;
 
+import com.kapil.reddit.user.domain.Permission;
 import com.kapil.reddit.user.domain.Role;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -43,7 +44,14 @@ public class JwtService {
                         .map(Role::getName)
                         .toList()
         );
-
+        claims.put(
+                "permissions",
+                roles.stream()
+                        .flatMap(role -> role.getPermissions().stream())
+                        .map(Permission::getName)
+                        .distinct()
+                        .toList()
+        );
 
         return Jwts.builder()
                 .setClaims(claims)
@@ -60,6 +68,10 @@ public class JwtService {
 
     public List<String> extractRoles(String token) {
         return getClaims(token).get("roles", List.class);
+    }
+
+    public List<String> extractPermissions(String token) {
+        return getClaims(token).get("permissions", List.class);
     }
 
     public boolean isTokenValid(String token) {
