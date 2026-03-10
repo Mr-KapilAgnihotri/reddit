@@ -44,12 +44,32 @@ public class CommunityService {
 
         Community saved = communityRepository.save(community);
 
+        // add creator as member
+        CommunityMember member = CommunityMember.builder()
+                .id(new CommunityMemberId(creator.getId(), saved.getId()))
+                .user(creator)
+                .community(saved)
+                .joinedAt(Instant.now())
+                .build();
+
+        communityMemberRepository.save(member);
+
+        // add creator as moderator
+        CommunityModerator moderator = CommunityModerator.builder()
+                .id(new CommunityModeratorId(saved.getId(), creator.getId()))
+                .community(saved)
+                .user(creator)
+                .assignedAt(Instant.now())
+                .build();
+
+        communityModeratorRepository.save(moderator);
+
         return toResponse(saved);
     }
 
     public CommunityResponse getCommunity(String name) {
 
-        Community community = communityRepository.findByName(name)
+        Community community = communityRepository.findByNameAndIsDeletedFalse(name)
                 .orElseThrow(() -> new BusinessException("Community not found"));
 
         return toResponse(community);
@@ -57,7 +77,7 @@ public class CommunityService {
 
     public List<CommunityResponse> listCommunities() {
 
-        return communityRepository.findAll()
+        return communityRepository.findByIsDeletedFalse()
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -72,7 +92,7 @@ public class CommunityService {
                 .orElseThrow(() -> new BusinessException("Community not found"));
 
         if (communityMemberRepository.existsByUserIdAndCommunityId(user.getId(), communityId)) {
-            throw new BusinessException("Already a member");
+            return;
         }
 
         CommunityMember member = CommunityMember.builder()
@@ -154,16 +174,24 @@ public class CommunityService {
 
         boolean isOwner = community.getCreatedBy().getId().equals(user.getId());
 
-        if (!isOwner) {
-            throw new BusinessException("Only owner can delete community");
+        boolean isAdmin = user.getRoles()
+                .stream()
+                .anyMatch(role -> role.getName().equals("ADMIN"));
+
+        if (!isOwner && !isAdmin) {
+            throw new BusinessException("Only owner or admin can delete community");
         }
 
         community.setIsDeleted(true);
-
         communityRepository.save(community);
+        communityMemberRepository.deleteAllByCommunityId(id);
+        communityModeratorRepository.deleteAllByCommunityId(id);
     }
 
+
     private CommunityResponse toResponse(Community community) {
+
+        long members = communityMemberRepository.countByCommunityId(community.getId());
 
         return CommunityResponse.builder()
                 .id(community.getId())
@@ -172,6 +200,55 @@ public class CommunityService {
                 .createdBy(community.getCreatedBy().getUsername())
                 .isPrivate(community.getIsPrivate())
                 .createdAt(community.getCreatedAt())
+                .memberCount(members)
                 .build();
     }
+
+
+
+
+
+    public List<CommunityResponse> getCommunitiesCreatedByUser(String email) {
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        return communityRepository.findByCreatedByIdAndIsDeletedFalse(user.getId())
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    public List<CommunityResponse> getJoinedCommunities(String email) {
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        return communityMemberRepository.findByUserId(user.getId())
+                .stream()
+                .map(member -> toResponse(member.getCommunity()))
+                .toList();
+    }
+
+    public List<CommunityResponse> getModeratedCommunities(String email) {
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        return communityModeratorRepository.findActiveModerations(user.getId())
+                .stream()
+                .map(mod -> toResponse(mod.getCommunity()))
+                .toList();
+    }
+
+
+    //Temporary --> future elastic search
+    public List<CommunityResponse> searchCommunities(String query) {
+
+        return communityRepository.findByNameContainingIgnoreCaseAndIsDeletedFalse(query)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
 }

@@ -24,4 +24,6 @@ public class CommunityResponse {
     private Boolean isPrivate;
 
     private Instant createdAt;
+
+    private Long memberCount;
 }

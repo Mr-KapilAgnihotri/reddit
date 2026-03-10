@@ -71,10 +71,7 @@ public class CommunityController {
         );
     }
 
-    @GetMapping("/{name}")
-    public CommunityResponse getCommunity(@PathVariable String name) {
-        return communityService.getCommunity(name);
-    }
+
 
     @GetMapping
     public List<CommunityResponse> listCommunities() {
@@ -88,4 +85,39 @@ public class CommunityController {
     ) {
         communityService.deleteCommunity(id, authentication.getName());
     }
+
+    @GetMapping("/me/created")
+    public List<CommunityResponse> myCreatedCommunities(Authentication authentication) {
+
+        return communityService.getCommunitiesCreatedByUser(authentication.getName());
+    }
+
+    @GetMapping("/me/joined")
+    public List<CommunityResponse> myJoinedCommunities(Authentication authentication) {
+
+        return communityService.getJoinedCommunities(authentication.getName());
+    }
+
+    @GetMapping("/me/moderating")
+    public List<CommunityResponse> myModeratedCommunities(Authentication authentication) {
+
+        System.out.println("Moderating endpoint called");
+
+        return communityService.getModeratedCommunities(authentication.getName());
+    }
+
+    @GetMapping("/search")
+    public List<CommunityResponse> searchCommunities(@RequestParam String query) {
+
+        return communityService.searchCommunities(query);
+    }
+
+   @GetMapping("/{name}")
+    public CommunityResponse getCommunity(@PathVariable String name) {
+        return communityService.getCommunity(name);
+    }
+
+
+
+
 }
