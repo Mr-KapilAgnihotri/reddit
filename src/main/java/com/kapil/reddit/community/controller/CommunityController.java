@@ -3,6 +3,8 @@ package com.kapil.reddit.community.controller;
 import com.kapil.reddit.community.dto.CommunityResponse;
 import com.kapil.reddit.community.dto.CreateCommunityRequest;
 import com.kapil.reddit.community.service.CommunityService;
+import com.kapil.reddit.post.dto.PostResponse;
+import com.kapil.reddit.post.service.PostService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -14,6 +16,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CommunityController {
 
+    private final PostService postService;
     private final CommunityService communityService;
 
     @PostMapping
@@ -117,7 +120,11 @@ public class CommunityController {
         return communityService.getCommunity(name);
     }
 
+    @GetMapping("/{name}/posts")
+    public List<PostResponse> getCommunityPosts(@PathVariable String name) {
 
+        return postService.getCommunityPosts(name);
+    }
 
 
 }
