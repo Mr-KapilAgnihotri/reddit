@@ -16,69 +16,25 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CommunityController {
 
-    private final PostService postService;
     private final CommunityService communityService;
+    private final PostService postService;
 
     @PostMapping
     public CommunityResponse createCommunity(
             Authentication authentication,
             @RequestBody CreateCommunityRequest request
     ) {
-
-        String email = authentication.getName();
-
-        return communityService.createCommunity(email, request);
+        return communityService.createCommunity(authentication.getName(), request);
     }
-
-    @PostMapping("/{id}/join")
-    public void joinCommunity(
-            @PathVariable Long id,
-            Authentication authentication
-    ) {
-        communityService.joinCommunity(id, authentication.getName());
-    }
-
-    @PostMapping("/{id}/moderators/{userId}")
-    public void addModerator(
-            @PathVariable Long id,
-            @PathVariable Long userId,
-            Authentication authentication
-    ) {
-
-        communityService.addModerator(
-                id,
-                userId,
-                authentication.getName()
-        );
-    }
-
-    @PostMapping("/{id}/leave")
-    public void leaveCommunity(
-            @PathVariable Long id,
-            Authentication authentication
-    ) {
-        communityService.leaveCommunity(id, authentication.getName());
-    }
-
-    @DeleteMapping("/{id}/moderators/{userId}")
-    public void removeModerator(
-            @PathVariable Long id,
-            @PathVariable Long userId,
-            Authentication authentication
-    ) {
-
-        communityService.removeModerator(
-                id,
-                userId,
-                authentication.getName()
-        );
-    }
-
-
 
     @GetMapping
     public List<CommunityResponse> listCommunities() {
         return communityService.listCommunities();
+    }
+
+    @GetMapping("/{name}")
+    public CommunityResponse getCommunity(@PathVariable String name) {
+        return communityService.getCommunity(name);
     }
 
     @DeleteMapping("/{id}")
@@ -89,42 +45,47 @@ public class CommunityController {
         communityService.deleteCommunity(id, authentication.getName());
     }
 
-    @GetMapping("/me/created")
-    public List<CommunityResponse> myCreatedCommunities(Authentication authentication) {
-
-        return communityService.getCommunitiesCreatedByUser(authentication.getName());
+    @PostMapping("/{id}/join")
+    public void joinCommunity(
+            @PathVariable Long id,
+            Authentication authentication
+    ) {
+        communityService.joinCommunity(id, authentication.getName());
     }
 
-    @GetMapping("/me/joined")
-    public List<CommunityResponse> myJoinedCommunities(Authentication authentication) {
-
-        return communityService.getJoinedCommunities(authentication.getName());
+    @PostMapping("/{id}/leave")
+    public void leaveCommunity(
+            @PathVariable Long id,
+            Authentication authentication
+    ) {
+        communityService.leaveCommunity(id, authentication.getName());
     }
 
-    @GetMapping("/me/moderating")
-    public List<CommunityResponse> myModeratedCommunities(Authentication authentication) {
-
-        System.out.println("Moderating endpoint called");
-
-        return communityService.getModeratedCommunities(authentication.getName());
+    @PostMapping("/{id}/moderators/{userId}")
+    public void addModerator(
+            @PathVariable Long id,
+            @PathVariable Long userId,
+            Authentication authentication
+    ) {
+        communityService.addModerator(id, userId, authentication.getName());
     }
 
-    @GetMapping("/search")
-    public List<CommunityResponse> searchCommunities(@RequestParam String query) {
-
-        return communityService.searchCommunities(query);
-    }
-
-   @GetMapping("/{name}")
-    public CommunityResponse getCommunity(@PathVariable String name) {
-        return communityService.getCommunity(name);
+    @DeleteMapping("/{id}/moderators/{userId}")
+    public void removeModerator(
+            @PathVariable Long id,
+            @PathVariable Long userId,
+            Authentication authentication
+    ) {
+        communityService.removeModerator(id, userId, authentication.getName());
     }
 
     @GetMapping("/{name}/posts")
     public List<PostResponse> getCommunityPosts(@PathVariable String name) {
-
         return postService.getCommunityPosts(name);
     }
 
-
+    @GetMapping("/search")
+    public List<CommunityResponse> searchCommunities(@RequestParam String query) {
+        return communityService.searchCommunities(query);
+    }
 }

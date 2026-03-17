@@ -2,6 +2,7 @@ package com.kapil.reddit.post.service;
 
 import com.kapil.reddit.common.exception.BusinessException;
 import com.kapil.reddit.community.domain.Community;
+import com.kapil.reddit.community.repository.CommunityMemberRepository;
 import com.kapil.reddit.community.repository.CommunityRepository;
 import com.kapil.reddit.post.domain.Post;
 import com.kapil.reddit.post.domain.PostMedia;
@@ -27,18 +28,34 @@ public class PostService {
     private final PostMediaRepository postMediaRepository;
     private final CommunityRepository communityRepository;
     private final UserRepository userRepository;
+    private final CommunityMemberRepository communityMemberRepository;
 
     public PostResponse createPost(String email, CreatePostRequest request) {
 
         User author = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException("User not found"));
 
-        Community community = communityRepository.findById(request.getCommunityId())
-                .orElseThrow(() -> new BusinessException("Community not found"));
+        Community community = null;
+
+        // Scenario 1: Posting inside a community
+        if (request.getCommunityId() != null) {
+
+            community = communityRepository.findById(request.getCommunityId())
+                    .orElseThrow(() -> new BusinessException("Community not found"));
+
+            boolean isMember = communityMemberRepository
+                    .existsByUserIdAndCommunityId(author.getId(), community.getId());
+
+            if (!isMember) {
+                throw new BusinessException("You must join the community before posting");
+            }
+        }
+
+        // Scenario 2: Profile post (no community)
 
         Post post = Post.builder()
                 .author(author)
-                .community(community)
+                .community(community) // null allowed for profile posts
                 .title(request.getTitle())
                 .originalText(request.getText())
                 .displayText(request.getText())
@@ -55,7 +72,8 @@ public class PostService {
 
         Post saved = postRepository.save(post);
 
-        if (request.getMedia() != null) {
+        // Handle media
+        if (request.getMedia() != null && !request.getMedia().isEmpty()) {
 
             for (MediaRequest mediaRequest : request.getMedia()) {
 
@@ -73,6 +91,22 @@ public class PostService {
 
         return toResponse(saved);
     }
+
+
+
+    public List<PostResponse> getUserPosts(String username) {
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        return postRepository.findByAuthorIdAndIsDeletedFalseOrderByCreatedAtDesc(user.getId())
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+
+
 
     public List<PostResponse> getCommunityPosts(String communityName) {
 
@@ -120,7 +154,11 @@ public class PostService {
                 .title(post.getTitle())
                 .text(post.getDisplayText())
                 .author(post.getAuthor().getUsername())
-                .community(post.getCommunity().getName())
+                .community(
+                        post.getCommunity() != null
+                                ? post.getCommunity().getName()
+                                : null
+                )
                 .score(post.getScore())
                 .upvotes(post.getUpvotes())
                 .downvotes(post.getDownvotes())
@@ -129,6 +167,33 @@ public class PostService {
                 .media(media)
                 .build();
     }
+    public List<PostResponse> getGlobalPosts() {
+
+        return postRepository
+                .findByIsDeletedFalseOrderByCreatedAtDesc()
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    public List<PostResponse> getHomeFeed(String email) {
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        List<Long> communityIds = communityMemberRepository
+                .findByUserId(user.getId())
+                .stream()
+                .map(member -> member.getCommunity().getId())
+                .toList();
+
+        return postRepository
+                .findByCommunityIdInAndIsDeletedFalseOrderByCreatedAtDesc(communityIds)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
 
     public PostResponse getPost(Long id) {
 

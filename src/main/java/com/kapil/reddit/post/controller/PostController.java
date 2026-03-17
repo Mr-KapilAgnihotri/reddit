@@ -16,40 +16,42 @@ public class PostController {
 
     private final PostService postService;
 
-    // Create Post
     @PostMapping
     public PostResponse createPost(
             Authentication authentication,
             @RequestBody CreatePostRequest request
     ) {
-
         return postService.createPost(authentication.getName(), request);
     }
 
-    // Get Single Post
     @GetMapping("/{id}")
     public PostResponse getPost(@PathVariable Long id) {
-
         return postService.getPost(id);
     }
 
-    // Get Posts by Community
-    @GetMapping("/community/{communityName}")
-    public List<PostResponse> getCommunityPosts(
-            @PathVariable String communityName
-    ) {
-
-        return postService.getCommunityPosts(communityName);
-    }
-
-    // Delete Post
     @DeleteMapping("/{id}")
     public void deletePost(
             @PathVariable Long id,
             Authentication authentication
     ) {
-
         postService.deletePost(id, authentication.getName());
     }
 
+    //  global feed
+    @GetMapping("/global")
+    public List<PostResponse> globalFeed() {
+        return postService.getGlobalPosts();
+    }
+
+    // Home feed (joined communities)
+    @GetMapping("/home")
+    public List<PostResponse> homeFeed(Authentication authentication) {
+        return postService.getHomeFeed(authentication.getName());
+    }
+
+    @GetMapping("/user/{username}")
+    public List<PostResponse> getUserPosts(@PathVariable String username) {
+
+        return postService.getUserPosts(username);
+    }
 }
