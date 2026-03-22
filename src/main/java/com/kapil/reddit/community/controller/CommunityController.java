@@ -6,6 +6,7 @@ import com.kapil.reddit.community.service.CommunityService;
 import com.kapil.reddit.post.dto.PostResponse;
 import com.kapil.reddit.post.service.PostService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -80,8 +81,12 @@ public class CommunityController {
     }
 
     @GetMapping("/{name}/posts")
-    public List<PostResponse> getCommunityPosts(@PathVariable String name) {
-        return postService.getCommunityPosts(name);
+    public Page<PostResponse> getCommunityPosts(
+            @PathVariable String name,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getCommunityPosts(name, page, size);
     }
 
     @GetMapping("/search")

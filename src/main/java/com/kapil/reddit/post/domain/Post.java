@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.Instant;
+import java.util.List;
 
 @Entity
 @Table(name = "posts")
@@ -48,4 +49,7 @@ public class Post {
 
     private Instant createdAt;
     private Instant updatedAt;
+
+    @OneToMany(mappedBy = "post", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<PostMedia> media;
 }

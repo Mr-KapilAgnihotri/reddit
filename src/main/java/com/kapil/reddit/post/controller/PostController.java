@@ -2,8 +2,10 @@ package com.kapil.reddit.post.controller;
 
 import com.kapil.reddit.post.dto.CreatePostRequest;
 import com.kapil.reddit.post.dto.PostResponse;
+import com.kapil.reddit.post.dto.UpdatePostRequest;
 import com.kapil.reddit.post.service.PostService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -39,19 +41,49 @@ public class PostController {
 
     //  global feed
     @GetMapping("/global")
-    public List<PostResponse> globalFeed() {
-        return postService.getGlobalPosts();
+    public Page<PostResponse> globalFeed(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getGlobalPosts(page, size);
     }
 
     // Home feed (joined communities)
     @GetMapping("/home")
-    public List<PostResponse> homeFeed(Authentication authentication) {
-        return postService.getHomeFeed(authentication.getName());
+    public Page<PostResponse> homeFeed(
+            Authentication authentication,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getHomeFeed(authentication.getName(), page, size);
     }
 
     @GetMapping("/user/{username}")
-    public List<PostResponse> getUserPosts(@PathVariable String username) {
+    public Page<PostResponse> getUserPosts(
+            @PathVariable String username,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getUserPosts(username, page, size);
+    }
 
-        return postService.getUserPosts(username);
+
+
+    @PutMapping("/{id}")
+    public PostResponse updatePost(
+            @PathVariable Long id,
+            Authentication authentication,
+            @RequestBody UpdatePostRequest request
+    ) {
+        return postService.updatePost(id, authentication.getName(), request);
+    }
+
+    @GetMapping("/community/{name}")
+    public Page<PostResponse> getCommunityPosts(
+            @PathVariable String name,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getCommunityPosts(name, page, size);
     }
 }
