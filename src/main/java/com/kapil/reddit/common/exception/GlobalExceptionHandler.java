@@ -43,4 +43,16 @@ public class GlobalExceptionHandler {
                 .path(request.getRequestURI())
                 .build();
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiError handleIllegalArgumentException(IllegalArgumentException ex, HttpServletRequest request) {
+        return ApiError.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("Invalid Argument")
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .build();
+    }
 }

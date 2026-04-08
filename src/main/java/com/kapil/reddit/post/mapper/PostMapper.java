@@ -9,15 +9,15 @@ import java.util.List;
 
 public class PostMapper {
 
-    public static PostResponse toResponse(Post post, List<PostMedia> mediaList) {
+    public static PostResponse toResponse(Post post, List<PostMedia> mediaList, Short userVote) {
 
-        List<PostMediaResponse> media = mediaList.stream()
+        List<PostMediaResponse> media = mediaList != null ? mediaList.stream()
                 .map(m -> PostMediaResponse.builder()
                         .mediaUrl(m.getMediaUrl())
                         .mediaType(m.getMediaType())
                         .caption(m.getCaption())
                         .build())
-                .toList();
+                .toList() : List.of();
 
         return PostResponse.builder()
                 .id(post.getId())
@@ -35,6 +35,7 @@ public class PostMapper {
                 .commentCount(post.getCommentCount())
                 .createdAt(post.getCreatedAt())
                 .media(media)
+                .userVote(userVote != null ? userVote : 0)
                 .build();
     }
 }

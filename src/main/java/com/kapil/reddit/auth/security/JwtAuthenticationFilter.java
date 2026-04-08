@@ -53,6 +53,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         List<String> permissions = jwtService.extractPermissions(token);
 
         List<SimpleGrantedAuthority> authorities =
+                permissions == null ? List.of() :
                 permissions.stream()
                         .map(SimpleGrantedAuthority::new)
                         .toList();

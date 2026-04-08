@@ -2,6 +2,8 @@ package com.kapil.reddit.post.vote.service;
 
 import com.kapil.reddit.common.exception.BusinessException;
 import com.kapil.reddit.post.domain.Post;
+import com.kapil.reddit.post.dto.PostResponse;
+import com.kapil.reddit.post.mapper.PostMapper;
 import com.kapil.reddit.post.repository.PostRepository;
 import com.kapil.reddit.post.vote.domain.PostVote;
 import com.kapil.reddit.post.vote.repository.PostVoteRepository;
@@ -20,7 +22,7 @@ public class PostVoteService {
     private final PostRepository postRepository;
     private final UserRepository userRepository;
 
-    public void vote(Long postId, String email, short newValue) {
+    public PostResponse vote(Long postId, String email, short newValue) {
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException("User not found"));
@@ -31,6 +33,8 @@ public class PostVoteService {
         PostVote existingVote = postVoteRepository
                 .findByPostIdAndUserId(postId, user.getId())
                 .orElse(null);
+
+        Short finalUserVote = newValue;
 
         if (existingVote == null) {
 
@@ -52,9 +56,8 @@ public class PostVoteService {
 
                 // REMOVE VOTE
                 postVoteRepository.delete(existingVote);
-
                 applyVote(post, newValue, -1);
-
+                finalUserVote = 0; // vote removed
             } else {
 
                 // SWITCH VOTE
@@ -70,10 +73,11 @@ public class PostVoteService {
 
         updateScore(post);
         postRepository.save(post);
+        
+        return PostMapper.toResponse(post, post.getMedia(), finalUserVote);
     }
 
     private void applyVote(Post post, short value, int delta) {
-
         if (value == 1) {
             post.setUpvotes(post.getUpvotes() + delta);
         } else {
@@ -83,5 +87,14 @@ public class PostVoteService {
 
     private void updateScore(Post post) {
         post.setScore(post.getUpvotes() - post.getDownvotes());
+        
+        long score = post.getScore();
+        double order = Math.log10(Math.max(Math.abs(score), 1));
+        int sign = Long.compare(score, 0);
+        
+        long ageInSeconds = post.getCreatedAt().getEpochSecond();
+        
+        double hotScore = (order * sign) + ((double) ageInSeconds / 45000.0);
+        post.setHotScore(hotScore);
     }
 }

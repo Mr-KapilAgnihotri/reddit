@@ -31,6 +31,8 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/error").permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/api/communities/**").authenticated()
                         .requestMatchers("/api/posts/**").authenticated()

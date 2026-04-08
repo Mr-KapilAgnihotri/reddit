@@ -1,0 +1,148 @@
+### IntelliJ HTTP Client API Tests
+### Run ALL requests from top to bottom using "Run All Requests in File".
+### Each run auto-generates unique email/community names via $timestamp.
+
+@host = http://localhost:8080
+
+### 1. Register a new User
+POST {{host}}/api/users
+Content-Type: application/json
+
+{
+  "username": "user_{{$timestamp}}",
+  "email": "user_{{$timestamp}}@reddit.com",
+  "password": "Password123!"
+}
+
+> {%
+    client.test("Register successful", function() {
+        client.assert(response.status === 200, "Register FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+    // Capture the email from the response body (returned by UserService)
+    client.global.set("test_email", response.body.email);
+    client.global.set("test_password", "Password123!");
+%}
+
+### 2. Login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{test_email}}",
+  "password": "{{test_password}}"
+}
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Login FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+    client.global.set("auth_token", response.body.access_token);
+    client.global.set("refresh_token", response.body.refresh_token);
+%}
+
+### 3. Create a Community
+POST {{host}}/api/communities
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "name": "comm_{{$timestamp}}",
+  "description": "Test community"
+}
+
+> {%
+    client.test("Create community successful", function() {
+        client.assert(response.status === 200, "Create community FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+    client.global.set("community_id", response.body.id);
+%}
+
+### 4. Join the Community
+POST {{host}}/api/communities/{{community_id}}/join
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+> {%
+    client.test("Join community successful", function() {
+        client.assert(response.status === 200, "Join community FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+%}
+
+### 5. Create a Post
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Welcome to Reddit Clone",
+  "text": "This is an introductory post about our Java community"
+}
+
+> {%
+    client.test("Create post successful", function() {
+        client.assert(response.status === 200, "Create post FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+    client.global.set("post_id", response.body.id);
+%}
+
+### 6. Get the Post (Increments view count)
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Get post successful", function() {
+        client.assert(response.status === 200, "Get post FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+%}
+
+### 7. Upvote the Post
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "value": 1
+}
+
+> {%
+    client.test("Upvote post successful", function() {
+        client.assert(response.status === 200, "Upvote FAILED: " + response.status + " - " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === 1, "userVote should be 1 but got: " + response.body.userVote);
+    });
+%}
+
+### 8. Fetch Home Feed (Sorted by Hot)
+GET {{host}}/api/posts/home?sort=hot
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Home feed (hot) fetched", function() {
+        client.assert(response.status === 200, "Home feed FAILED: " + response.status);
+        client.assert(response.body.content.length > 0, "Home feed is empty!");
+    });
+%}
+
+### 9. Fetch Global Feed (Sorted by New)
+GET {{host}}/api/posts/global?sort=new
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Global feed (new) fetched", function() {
+        client.assert(response.status === 200, "Global feed FAILED: " + response.status);
+    });
+%}
+
+### 10. Refresh Access Token
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{refresh_token}}"
+}
+
+> {%
+    client.test("Token refresh successful", function() {
+        client.assert(response.status === 200, "Token refresh FAILED: " + response.status + " - " + JSON.stringify(response.body));
+    });
+%}

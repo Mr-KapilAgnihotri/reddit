@@ -37,7 +37,7 @@ public class CommunityService {
                 .name(request.getName())
                 .description(request.getDescription())
                 .createdBy(creator)
-                .isPrivate(request.getIsPrivate())
+                .isPrivate(request.getIsPrivate() != null ? request.getIsPrivate() : false)
                 .isDeleted(false)
                 .createdAt(Instant.now())
                 .build();

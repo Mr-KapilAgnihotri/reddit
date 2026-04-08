@@ -1,12 +1,18 @@
 package com.kapil.reddit.post.vote.dto;
 
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
 public class VoteRequest {
 
-    private String voteType; // "UPVOTE" or "DOWNVOTE"
+    private Integer value; // 1 for upvote, -1 for downvote
 
     public short toValue() {
-        if ("UPVOTE".equalsIgnoreCase(voteType)) return 1;
-        if ("DOWNVOTE".equalsIgnoreCase(voteType)) return -1;
-        throw new IllegalArgumentException("Invalid vote type");
+        if (value == null || (value != 1 && value != -1)) {
+            throw new IllegalArgumentException("Vote value must be 1 or -1");
+        }
+        return value.shortValue();
     }
-}
+}

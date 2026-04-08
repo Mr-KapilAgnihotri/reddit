@@ -31,4 +31,6 @@ public class PostResponse {
     private Instant createdAt;
 
     private List<PostMediaResponse> media;
+
+    private Short userVote;
 }

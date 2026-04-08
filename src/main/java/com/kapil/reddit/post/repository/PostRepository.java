@@ -11,23 +11,23 @@ import java.util.List;
 public interface PostRepository extends JpaRepository<Post, Long> {
 
         @EntityGraph(attributePaths = "media")
-        Page<Post> findByIsDeletedFalseOrderByCreatedAtDesc(Pageable pageable);
+        Page<Post> findByIsDeletedFalse(Pageable pageable);
 
         @EntityGraph(attributePaths = "media")
-        Page<Post> findByAuthorIdAndIsDeletedFalseOrderByCreatedAtDesc(
+        Page<Post> findByAuthorIdAndIsDeletedFalse(
                 Long authorId,
                 Pageable pageable
         );
 
         @EntityGraph(attributePaths = "media")
-        Page<Post> findByCommunityIdAndIsDeletedFalseOrderByCreatedAtDesc(
+        Page<Post> findByCommunityIdAndIsDeletedFalse(
                 Long communityId,
                 Pageable pageable
         );
 
         @EntityGraph(attributePaths = "media")
-        Page<Post> findByCommunityIdInAndIsDeletedFalseOrderByCreatedAtDesc(
+        Page<Post> findByCommunityIdInAndIsDeletedFalse(
                 List<Long> communityIds,
                 Pageable pageable
         );
-    }
+}

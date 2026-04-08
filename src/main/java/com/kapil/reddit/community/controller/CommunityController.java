@@ -82,11 +82,14 @@ public class CommunityController {
 
     @GetMapping("/{name}/posts")
     public Page<PostResponse> getCommunityPosts(
+            Authentication authentication,
             @PathVariable String name,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "new") String sort
     ) {
-        return postService.getCommunityPosts(name, page, size);
+        String email = authentication != null ? authentication.getName() : null;
+        return postService.getCommunityPosts(email, name, page, size, sort);
     }
 
     @GetMapping("/search")

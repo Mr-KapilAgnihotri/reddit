@@ -45,6 +45,7 @@ public class Post {
 
     private Double hotScore;
 
+    private Boolean isModerated;
     private Boolean isDeleted;
 
     private Instant createdAt;
