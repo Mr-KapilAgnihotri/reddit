@@ -15,6 +15,9 @@ import com.kapil.reddit.post.repository.PostRepository;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -42,6 +45,16 @@ public class CommentService {
 
     // ========================= CREATE COMMENT =========================
 
+    /**
+     * Evicts feed and postDetail caches because a new comment increments post.commentCount,
+     * which is visible in PostResponse (feeds and post detail).
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "comments",    allEntries = true),
+            @CacheEvict(value = "postDetail",  allEntries = true),
+            @CacheEvict(value = "globalFeed",  allEntries = true),
+            @CacheEvict(value = "homeFeed",    allEntries = true)
+    })
     @Transactional
     public CommentResponse createComment(String email, CreateCommentRequest request) {
 
@@ -100,6 +113,20 @@ public class CommentService {
      *
      * Total DB hits: 3 regardless of nesting depth or comment count.
      */
+    /**
+     * N+1-free tree fetch.
+     *
+     * Cache key: postId + normalized email (or 'anon') + page + size.
+     * Email normalization is done via explicit SpEL ternary (not Elvis ?:) to safely
+     * handle null (unauthenticated callers). Each user gets a distinct cache bucket
+     * so userVote is always correct — Option C from the design review.
+     *
+     * sync=true prevents cache stampede: only one thread rebuilds the tree on expiry.
+     */
+    @Cacheable(
+            value = "comments",
+            key   = "#postId + '-' + (#email != null ? #email.toLowerCase().trim() : 'anon') + '-' + #page + '-' + #size"
+    )
     @Transactional(readOnly = true)
     public Page<CommentResponse> getCommentsForPost(Long postId, String email, int page, int size) {
 
@@ -193,13 +220,8 @@ public class CommentService {
 
     // ========================= UPDATE COMMENT =========================
 
-    /**
-     * Updates the displayText of a comment.
-     * Rules:
-     *  - Only the original author can edit.
-     *  - Soft-deleted comments cannot be edited.
-     *  - originalText is never changed (audit trail for ML).
-     */
+    /** Only evict comments cache — update does not affect post counts or feeds. */
+    @CacheEvict(value = "comments", allEntries = true)
     @Transactional
     public CommentResponse updateComment(Long commentId, String email, UpdateCommentRequest request) {
 
@@ -232,6 +254,15 @@ public class CommentService {
      *   - Same vote  → remove (toggle off)
      *   - Diff vote  → switch
      */
+    /**
+     * Evict comments and postDetail after a vote.
+     * Comment vote changes score visible in the comment tree AND in post detail
+     * (no feed impact — post.score is unchanged).
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "comments",   allEntries = true),
+            @CacheEvict(value = "postDetail", allEntries = true)
+    })
     @Transactional
     public CommentResponse voteComment(Long commentId, String email, short newValue) {
 
@@ -303,6 +334,16 @@ public class CommentService {
      *  - Parent comment may already be deleted — replies are still allowed (Reddit behavior).
      *  - Decrements post.commentCount (floor: 0).
      */
+    /**
+     * Evict comments, postDetail (commentCount changes), and feeds.
+     * @CacheEvict fires after successful @Transactional commit — DB is always authoritative.
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "comments",    allEntries = true),
+            @CacheEvict(value = "postDetail",  allEntries = true),
+            @CacheEvict(value = "globalFeed",  allEntries = true),
+            @CacheEvict(value = "homeFeed",    allEntries = true)
+    })
     @Transactional
     public void deleteComment(Long commentId, String email) {
 

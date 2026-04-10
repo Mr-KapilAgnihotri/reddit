@@ -2,12 +2,14 @@ package com.kapil.reddit.post.dto;
 
 import lombok.Builder;
 import lombok.Getter;
+import lombok.extern.jackson.Jacksonized;
 
 import java.time.Instant;
 import java.util.List;
 
 @Getter
 @Builder
+@Jacksonized
 public class PostResponse {
 
     private Long id;

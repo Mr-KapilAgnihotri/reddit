@@ -35,9 +35,15 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/api/communities/**").authenticated()
-                        // Comment reads are public (unauthenticated → userVote = 0)
+                        // ── Public read access (Reddit-style: no login required to browse) ──
+                        // Comment tree — unauthenticated callers get userVote=0
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*/comments").permitAll()
-                        // Comment writes (create, vote, delete) require authentication
+                        // Global feed, community feed, user posts, single post — all public
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/global").permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/community/**").permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/user/**").permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*").permitAll()
+                        // ── All writes (POST, PUT, DELETE) require authentication ──
                         .requestMatchers("/api/comments/**").authenticated()
                         .requestMatchers("/api/posts/**").authenticated()
                         .anyRequest().authenticated()

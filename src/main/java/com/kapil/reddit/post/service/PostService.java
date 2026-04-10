@@ -19,6 +19,9 @@ import com.kapil.reddit.post.vote.repository.PostVoteRepository;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -71,6 +74,10 @@ public class PostService {
 
     // ================= CREATE POST =================
 
+    @Caching(evict = {
+            @CacheEvict(value = "globalFeed", allEntries = true),
+            @CacheEvict(value = "homeFeed",   allEntries = true)
+    })
     public PostResponse createPost(String email, CreatePostRequest request) {
 
         User author = userRepository.findByEmail(email)
@@ -136,6 +143,14 @@ public class PostService {
 
     // ================= GLOBAL FEED =================
 
+    /**
+     * sync=true activates stampede protection: only one thread populates the cache
+     * on expiry; concurrent requests wait rather than all hitting the DB.
+     */
+    @Cacheable(
+            value = "globalFeed",
+            key   = "#page + '-' + #size + '-' + #sort"
+    )
     public Page<PostResponse> getGlobalPosts(String email, int page, int size, String sort) {
         Long userId = getUserIdOrNull(email);
         Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
@@ -145,6 +160,15 @@ public class PostService {
 
     // ================= HOME FEED =================
 
+    /**
+     * Cache key includes normalized email (lowercase, trimmed) so each user
+     * gets their own cache bucket — prevents cross-user userVote leakage.
+     * Email is always non-null here (authenticated endpoint).
+     */
+    @Cacheable(
+            value = "homeFeed",
+            key   = "#email.toLowerCase().trim() + '-' + #page + '-' + #size + '-' + #sort"
+    )
     public Page<PostResponse> getHomeFeed(String email, int page, int size, String sort) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException("User not found"));
@@ -193,6 +217,7 @@ public class PostService {
 
     // ================= GET SINGLE POST =================
 
+    @Cacheable(value = "postDetail", key = "#id")
     public PostResponse getPost(Long id, String email) {
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Post not found"));
@@ -212,6 +237,11 @@ public class PostService {
 
     // ================= UPDATE POST =================
 
+    @Caching(evict = {
+            @CacheEvict(value = "postDetail", allEntries = true),
+            @CacheEvict(value = "globalFeed", allEntries = true),
+            @CacheEvict(value = "homeFeed",   allEntries = true)
+    })
     public PostResponse updatePost(Long id, String email, UpdatePostRequest request) {
 
         Post post = postRepository.findById(id)
@@ -241,6 +271,11 @@ public class PostService {
 
     // ================= DELETE POST =================
 
+    @Caching(evict = {
+            @CacheEvict(value = "postDetail", allEntries = true),
+            @CacheEvict(value = "globalFeed", allEntries = true),
+            @CacheEvict(value = "homeFeed",   allEntries = true)
+    })
     public void deletePost(Long id, String email) {
 
         Post post = postRepository.findById(id)

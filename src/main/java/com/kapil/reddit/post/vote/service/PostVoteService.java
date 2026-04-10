@@ -10,6 +10,8 @@ import com.kapil.reddit.post.vote.repository.PostVoteRepository;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -22,6 +24,18 @@ public class PostVoteService {
     private final PostRepository postRepository;
     private final UserRepository userRepository;
 
+    /**
+     * Evict all post-related caches after a vote:
+     *   postDetail → updated score/userVote visible immediately
+     *   globalFeed / homeFeed → updated score/hotScore in feed lists
+     * @CacheEvict fires AFTER the @Transactional commit (Spring default),
+     * so the DB is always ahead of the cache.
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "postDetail", allEntries = true),
+            @CacheEvict(value = "globalFeed", allEntries = true),
+            @CacheEvict(value = "homeFeed",   allEntries = true)
+    })
     public PostResponse vote(Long postId, String email, short newValue) {
 
         User user = userRepository.findByEmail(email)
