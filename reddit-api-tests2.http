@@ -335,3 +335,195 @@ Authorization: Bearer {{auth_token}}
         client.assert(root.children.length > 0, "Children of deleted comment must still be visible");
     });
 %}
+
+### 23. Update an Existing Comment (Edit)
+PUT {{host}}/api/comments/{{reply_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "This reply has been EDITED to test updates."
+}
+
+> {%
+    client.test("Update comment successful", function() {
+        client.assert(response.status === 200, "Update FAILED: " + response.status + " - " + JSON.stringify(response.body));
+        client.assert(response.body.text === "This reply has been EDITED to test updates.", "Text was not updated.");
+        // Depending on your API, you might also assert an 'isEdited' flag or 'updatedAt' timestamp here
+    });
+%}
+
+### 24. Attempt to Edit a Deleted Comment (Should Fail)
+PUT {{host}}/api/comments/{{comment_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "Trying to edit a soft-deleted comment."
+}
+
+> {%
+    client.test("Edit deleted comment fails", function() {
+        // Standard behavior is to return 403 Forbidden or 400 Bad Request
+        client.assert(response.status === 403 || response.status === 400 || response.status === 404, "Should not allow editing a deleted comment. Got: " + response.status);
+    });
+%}
+
+### 25. Attempt to Create Comment with Empty Text (Validation Test)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "   "
+}
+
+> {%
+    client.test("Empty text validation", function() {
+        client.assert(response.status === 400, "Should return 400 Bad Request for empty text. Got: " + response.status);
+    });
+%}
+
+### 26. Attempt to Reply to a Non-Existent Comment
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "parentCommentId": 999999,
+  "text": "This should fail because the parent doesn't exist."
+}
+
+> {%
+    client.test("Reply to missing parent fails", function() {
+        client.assert(response.status === 404, "Should return 404 Not Found. Got: " + response.status);
+    });
+%}
+
+
+### ─── ADVANCED VOTING STATES ────────────────────────────────────────────────
+
+### 27. Vote Switch Downvote → Upvote
+# First, apply a downvote to the reply
+POST {{host}}/api/comments/{{reply_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    client.test("Downvote applied", function() {
+        client.assert(response.status === 200, "Downvote FAILED");
+    });
+%}
+
+### 28. Now Switch that Downvote to an Upvote
+POST {{host}}/api/comments/{{reply_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("Switch downvote to upvote", function() {
+        client.assert(response.status === 200, "Switch FAILED: " + response.status);
+        client.assert(response.body.userVote === 1, "userVote should be 1");
+        // If it was -1 and changed to 1, score should jump by 2 (e.g., from -1 to 1)
+    });
+%}
+
+### 29. Toggle Off Downvote (Return to Neutral)
+# Apply downvote again to test removal
+POST {{host}}/api/comments/{{reply_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    // Now remove it by sending -1 again
+    client.global.set("temp_reply_id", response.body.id);
+%}
+
+### 30. Remove Downvote
+POST {{host}}/api/comments/{{reply_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    client.test("Toggle off downvote", function() {
+        client.assert(response.status === 200, "Remove downvote FAILED");
+        client.assert(response.body.userVote === 0, "userVote should return to 0");
+    });
+%}
+
+
+### ─── LEAF NODE DELETION & POST UPDATES ───────────────────────────────────
+
+### 31. Create a "Leaf" Comment (No Children)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "This is a leaf comment that will be fully deleted."
+}
+
+> {%
+    client.test("Create leaf comment", function() {
+        client.assert(response.status === 201, "Create FAILED");
+    });
+    client.global.set("leaf_comment_id", response.body.id);
+%}
+
+### 32. Delete the Leaf Comment (Hard Delete / Hidden)
+# Because it has no children, Reddit standard behavior usually removes it entirely rather than showing [deleted]
+DELETE {{host}}/api/comments/{{leaf_comment_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Delete leaf comment", function() {
+        client.assert(response.status === 204 || response.status === 200, "Delete leaf FAILED: " + response.status);
+    });
+%}
+
+### 33. Update the Post
+PUT {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "This post text has been updated!"
+}
+
+> {%
+    client.test("Update post successful", function() {
+        client.assert(response.status === 200, "Update post FAILED: " + response.status);
+        client.assert(response.body.text === "This post text has been updated!", "Post text not updated.");
+    });
+%}
+
+### 34. Delete the Post
+DELETE {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Delete post successful", function() {
+        client.assert(response.status === 204 || response.status === 200, "Delete post FAILED: " + response.status);
+    });
+%}
+
+### 35. Verify Post is Deleted
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Get deleted post returns 404", function() {
+        client.assert(response.status === 404, "Post should be deleted, expected 404, got: " + response.status);
+    });
+%}

@@ -35,6 +35,10 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/api/communities/**").authenticated()
+                        // Comment reads are public (unauthenticated → userVote = 0)
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*/comments").permitAll()
+                        // Comment writes (create, vote, delete) require authentication
+                        .requestMatchers("/api/comments/**").authenticated()
                         .requestMatchers("/api/posts/**").authenticated()
                         .anyRequest().authenticated()
                 )

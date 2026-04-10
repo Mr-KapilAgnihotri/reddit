@@ -1,6 +1,7 @@
 package com.kapil.reddit.post.service;
 
 import com.kapil.reddit.common.exception.BusinessException;
+import com.kapil.reddit.common.exception.ResourceNotFoundException;
 import com.kapil.reddit.community.domain.Community;
 import com.kapil.reddit.community.repository.CommunityMemberRepository;
 import com.kapil.reddit.community.repository.CommunityRepository;
@@ -194,10 +195,10 @@ public class PostService {
 
     public PostResponse getPost(Long id, String email) {
         Post post = postRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("Post not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Post not found"));
 
         if (Boolean.TRUE.equals(post.getIsDeleted())) {
-            throw new BusinessException("Post deleted");
+            throw new ResourceNotFoundException("Post not found");
         }
 
         post.setViewCount(post.getViewCount() + 1);
@@ -223,8 +224,13 @@ public class PostService {
             throw new BusinessException("Only author can edit post");
         }
 
-        post.setTitle(request.getTitle());
-        post.setDisplayText(request.getText());
+        // Only update fields that were actually provided (null = not supplied in request)
+        if (request.getTitle() != null) {
+            post.setTitle(request.getTitle());
+        }
+        if (request.getText() != null) {
+            post.setDisplayText(request.getText());
+        }
         post.setUpdatedAt(Instant.now());
 
         postRepository.save(post);

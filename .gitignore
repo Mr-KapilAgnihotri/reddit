@@ -6,6 +6,8 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+interview-prep.txt
+
 ### STS ###
 .apt_generated
 .classpath
