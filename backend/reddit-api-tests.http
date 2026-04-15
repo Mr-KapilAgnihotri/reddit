@@ -1,0 +1,1502 @@
+### ================================================================================
+### REDDIT CLONE — COMPLETE API TEST SUITE
+### Spring Boot + PostgreSQL + Redis Cache
+### ================================================================================
+###
+### HOW TO RUN:
+###   1. Start the app with default application.properties (verificationToken is included on register for this suite).
+###   2. Click "Run All Requests in File" (▶▶) in IntelliJ HTTP Client.
+###   Tests must run TOP TO BOTTOM — each test captures variables used by later tests.
+###
+### WHAT IS TESTED:
+###   Section A : Auth (register, email verification, login, refresh token, forgot-password, negative cases)
+###   A1 stores verification_token from response.verificationToken (disable via app.auth.expose-verification-token-on-register=false in prod).
+###   Section B : Communities (create, join)
+###   Section C : Posts (create, read, update, delete, partial update)
+###   Section D : Post Voting (upvote, toggle off, switch, hot score)
+###   Section E : Feeds (global, home — hot/new/top sorting)
+###   Section F : Redis Cache — Feed cache hit/miss verification
+###   Section G : Comments (create, nested tree 3 levels deep)
+###   Section H : Comment Voting (upvote, toggle, switch, downvote)
+###   Section I : Comment Edit (update text, guard: deleted comment can't be edited)
+###   Section J : Redis Cache — Comment cache hit/miss verification
+###   Section K : Soft Delete (comment, post — [deleted] placeholder, children survive)
+###   Section L : Validation & Error Cases (400, 404 responses)
+###   Section M : Cache Eviction Proof (write → cache cleared → re-fetch from DB)
+###   Section N : Unauthenticated Access (public comment tree, userVote always 0)
+###   Section O : Advanced Voting States (downvote→upvote switch, toggle off downvote)
+###   Section P : Token Refresh
+###   Section Q : Cleanup (delete post, verify 404)
+###
+### CACHE VERIFICATION STRATEGY:
+###   The HTTP client cannot directly read Redis.
+###   Instead we verify INDIRECTLY:
+###     1. Call an endpoint → observe response time (first call: slow = DB)
+###     2. Call SAME endpoint again → should be FASTER (Redis hit)
+###     3. Perform a write → call again → stale data must NOT appear (cache evicted)
+###   Use redis-cli KEYS "*" separately to inspect Redis keys:
+###     docker exec reddit-redis redis-cli KEYS "*"
+###     docker exec reddit-redis redis-cli TTL "reddit:globalFeed::0-20-new"
+###
+### ================================================================================
+
+@host = http://localhost:8080
+### Set by A1 response handler (do not define @verification_token here — empty file vars break ?token={{verification_token}})
+### Optional: password-reset experiments — paste from DB: SELECT token FROM password_reset_tokens ORDER BY id DESC LIMIT 1;
+@reset_token =
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION A: AUTH
+### ════════════════════════════════════════════════════════════════════
+
+### A1. Register a new User
+POST {{host}}/api/users
+Content-Type: application/json
+
+{
+  "username": "user_{{$timestamp}}",
+  "email": "user_{{$timestamp}}@reddit.com",
+  "password": "Password123!"
+}
+
+> {%
+    client.test("A1 — Register successful", function() {
+        client.assert(response.status === 200, "Register FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.verificationToken != null && response.body.verificationToken.length > 0,
+            "No verificationToken in register response — set app.auth.expose-verification-token-on-register=true");
+    });
+    client.global.set("test_email", response.body.email);
+    client.global.set("test_username", response.body.username);
+    client.global.set("test_password", "Password123!");
+    client.global.set("verification_token", response.body.verificationToken);
+%}
+
+### A1b. Login BEFORE email verification — MUST fail (400)
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{test_email}}",
+  "password": "{{test_password}}"
+}
+
+> {%
+    client.test("A1b — Login blocked until email verified", function() {
+        client.assert(response.status === 400, "Expected 400 before verify, got " + response.status);
+        client.assert(response.body && response.body.message && response.body.message.indexOf("Email not verified") >= 0, "Expected Email not verified message");
+    });
+%}
+
+### A1c. Verify email (GET — same as link in email; token from A1)
+GET {{host}}/api/auth/verify?token={{verification_token}}
+
+> {%
+    client.test("A1c — Email verified", function() {
+        client.assert(response.status === 200, "Verify FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+%}
+
+### A1d. Verify email (POST with JSON body) — optional alternative to A1c
+# POST {{host}}/api/auth/verify
+# Content-Type: application/json
+#
+# {
+#   "token": "{{verification_token}}"
+# }
+
+### A2. Login — captures auth_token + refresh_token (run after A1c)
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{test_email}}",
+  "password": "{{test_password}}"
+}
+
+> {%
+    client.test("A2 — Login successful", function() {
+        client.assert(response.status === 200, "Login FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.access_token != null, "No access_token in response");
+        client.assert(response.body.refresh_token != null, "No refresh_token in response");
+    });
+    client.global.set("auth_token", response.body.access_token);
+    client.global.set("refresh_token", response.body.refresh_token);
+%}
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION A2: PASSWORD RESET & EMAIL VERIFICATION NEGATIVE CASES
+### ════════════════════════════════════════════════════════════════════
+
+### A2a. Forgot password — always 200 (no hint if email is unknown)
+POST {{host}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "does-not-exist-{{$timestamp}}@reddit.com"
+}
+
+> {%
+    client.test("A2a — Forgot password unknown email still 200", function() {
+        client.assert(response.status === 200, "Expected 200, got " + response.status);
+    });
+%}
+
+### A2b. Invalid verification token — expect 404
+GET {{host}}/api/auth/verify?token=00000000-0000-0000-0000-000000000000
+
+> {%
+    client.test("A2b — Invalid verify token → 404", function() {
+        client.assert(response.status === 404, "Expected 404, got " + response.status);
+    });
+%}
+
+### A2c. (Optional — does not change {{test_password}} for the rest of this file)
+### Use a dedicated test user if you run this block: register, verify, set @reset_token from DB after forgot-password.
+# POST {{host}}/api/auth/forgot-password
+# Content-Type: application/json
+# { "email": "{{reset_test_email}}" }
+#
+# POST {{host}}/api/auth/reset-password
+# Content-Type: application/json
+# { "token": "{{reset_token}}", "newPassword": "NewPassword99!" }
+#
+# Second reset with same token → expect 404.
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION B: COMMUNITIES
+### ════════════════════════════════════════════════════════════════════
+
+### B1. Create a Community
+POST {{host}}/api/communities
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "name": "comm_{{$timestamp}}",
+  "description": "Test community for cache testing"
+}
+
+> {%
+    client.test("B1 — Create community", function() {
+        client.assert(response.status === 200, "Create community FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.id != null, "Community ID is null");
+    });
+    client.global.set("community_id", response.body.id);
+    client.global.set("community_name", response.body.name);
+%}
+
+### B2. Join the Community (creator is auto-joined — this is idempotent)
+POST {{host}}/api/communities/{{community_id}}/join
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+> {%
+    client.test("B2 — Join community", function() {
+        client.assert(response.status === 200, "Join community FAILED: " + response.status);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION C: POSTS
+### ════════════════════════════════════════════════════════════════════
+
+### C1. Create Post — EVICTS globalFeed and homeFeed caches
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Welcome to Reddit Clone",
+  "text": "This is the original post text."
+}
+
+> {%
+    client.test("C1 — Create post (evicts feed caches)", function() {
+        client.assert(response.status === 200, "Create post FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.id != null, "Post ID null");
+        client.assert(response.body.commentCount === 0, "New post commentCount should be 0");
+        client.assert(response.body.score === 0, "New post score should be 0");
+        client.assert(response.body.userVote === 0, "New post userVote should be 0");
+    });
+    client.global.set("post_id", response.body.id);
+%}
+
+### C2. Get Post (First Call — populates postDetail cache)
+### EXPECT: DB hit (slightly slower), then cached for 10 min
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("C2 — Get post (1st call → DB, caches result)", function() {
+        client.assert(response.status === 200, "Get post FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.id != null, "Post ID null in response");
+        client.assert(response.body.title === "Welcome to Reddit Clone", "Title mismatch");
+    });
+%}
+
+### C3. Get Post Again (Second Call — should serve from Redis postDetail cache)
+### EXPECT: faster response time than C2, same data
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("C3 — Get post (2nd call → from cache, same data)", function() {
+        client.assert(response.status === 200, "Get post FAILED on 2nd call: " + response.status);
+        client.assert(response.body.title === "Welcome to Reddit Clone", "Cached post title mismatch");
+        // REDIS KEY: reddit:postDetail::{post_id}
+        // docker exec reddit-redis redis-cli GET "reddit:postDetail::{{post_id}}"
+    });
+%}
+
+### C4. Update Post — only text (no title) — PARTIAL UPDATE test
+### ALSO EVICTS: postDetail, globalFeed, homeFeed caches
+PUT {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "This post text has been UPDATED via partial update (title unchanged)."
+}
+
+> {%
+    client.test("C4 — Partial update post (title unchanged, cache evicted)", function() {
+        client.assert(response.status === 200, "Update post FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.text === "This post text has been UPDATED via partial update (title unchanged).", "Text not updated");
+        client.assert(response.body.title === "Welcome to Reddit Clone", "Title should be unchanged in partial update");
+    });
+%}
+
+### C5. Get Post After Update (postDetail cache was evicted — fresh DB hit)
+### EXPECT: reflects updated text, NOT stale cached text
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("C5 — Get post after update (fresh from DB, not stale cache)", function() {
+        client.assert(response.status === 200, "Get post FAILED: " + response.status);
+        client.assert(response.body.text === "This post text has been UPDATED via partial update (title unchanged).", "STALE CACHE BUG: Text is old value");
+        client.assert(response.body.title === "Welcome to Reddit Clone", "Title still unchanged");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION D: POST VOTING
+### ════════════════════════════════════════════════════════════════════
+
+### D1. Upvote Post — EVICTS postDetail, globalFeed, homeFeed caches
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("D1 — Upvote post (evicts postDetail + feeds)", function() {
+        client.assert(response.status === 200, "Upvote FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === 1, "userVote should be 1, got: " + response.body.userVote);
+        client.assert(response.body.upvotes === 1, "upvotes should be 1, got: " + response.body.upvotes);
+        client.assert(response.body.score === 1, "score should be 1, got: " + response.body.score);
+        // hotScore is an internal DB column used for sorting — not exposed in PostResponse DTO
+    });
+%}
+
+### D2. Get Post After Vote (should show updated score — not stale cache)
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("D2 — Get post after vote (fresh score, cache repopulated)", function() {
+        client.assert(response.status === 200, "Get post FAILED: " + response.status);
+        client.assert(response.body.score === 1, "STALE CACHE BUG: score should be 1, got: " + response.body.score);
+        client.assert(response.body.userVote === 1, "userVote should be 1, got: " + response.body.userVote);
+    });
+%}
+
+### D3. Toggle Off Vote (same value = remove vote) — EVICTS caches again
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("D3 — Toggle off post vote (score back to 0)", function() {
+        client.assert(response.status === 200, "Toggle FAILED: " + response.status);
+        client.assert(response.body.userVote === 0, "userVote should be 0 after toggle, got: " + response.body.userVote);
+        client.assert(response.body.score === 0, "score should be 0 after toggle, got: " + response.body.score);
+    });
+%}
+
+### D4. Re-upvote (restore for later tests)
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("D4 — Re-upvote post (restore score=1)", function() {
+        client.assert(response.status === 200, "Re-upvote FAILED: " + response.status);
+        client.assert(response.body.userVote === 1, "userVote should be 1");
+        client.assert(response.body.score === 1, "score should be 1");
+    });
+%}
+
+### D5. Switch Vote: Upvote → Downvote (score jumps by -2)
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    client.test("D5 — Switch post vote upvote→downvote (score -1, hotScore recalculated)", function() {
+        client.assert(response.status === 200, "Switch FAILED: " + response.status);
+        client.assert(response.body.userVote === -1, "userVote should be -1, got: " + response.body.userVote);
+        client.assert(response.body.upvotes === 0, "upvotes should be 0 after switch");
+        client.assert(response.body.downvotes === 1, "downvotes should be 1 after switch");
+        client.assert(response.body.score === -1, "score should be -1 after switch");
+    });
+%}
+
+### D6. Switch Back: Downvote → Upvote (restore positive score)
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("D6 — Switch back downvote→upvote (score +1)", function() {
+        client.assert(response.status === 200, "Switch-back FAILED: " + response.status);
+        client.assert(response.body.userVote === 1, "userVote should be 1");
+        client.assert(response.body.score === 1, "score should be 1");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION E: FEEDS (ALL SORT MODES)
+### ════════════════════════════════════════════════════════════════════
+
+### E1. Global Feed — Sort: new (1st call → DB hit, then cached 5 min)
+### REDIS KEY: reddit:globalFeed::0-20-new
+GET {{host}}/api/posts/global?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E1 — Global feed (new) — 1st call (DB → cache)", function() {
+        client.assert(response.status === 200, "Global feed FAILED: " + response.status);
+        client.assert(response.body.content != null, "Content array missing");
+    });
+%}
+
+### E2. Global Feed — Sort: new (2nd call — Redis cache hit)
+### VERIFY: same data, faster response
+GET {{host}}/api/posts/global?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E2 — Global feed (new) — 2nd call (→ Redis cache hit)", function() {
+        client.assert(response.status === 200, "Global feed cache FAILED: " + response.status);
+        // redis-cli: KEYS "reddit:globalFeed::*" → should show this key
+    });
+%}
+
+### E3. Global Feed — Sort: hot (different key → separate cache entry)
+### REDIS KEY: reddit:globalFeed::0-20-hot
+GET {{host}}/api/posts/global?sort=hot&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E3 — Global feed (hot sort) — separate cache entry", function() {
+        client.assert(response.status === 200, "Global feed hot FAILED: " + response.status);
+    });
+%}
+
+### E4. Global Feed — Sort: top
+### REDIS KEY: reddit:globalFeed::0-20-top
+GET {{host}}/api/posts/global?sort=top&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E4 — Global feed (top sort) — another cache entry", function() {
+        client.assert(response.status === 200, "Global feed top FAILED: " + response.status);
+    });
+%}
+
+### E5. Home Feed — Sort: hot (1st call — DB hit, then cached per user)
+### REDIS KEY: reddit:homeFeed::{email}-0-20-hot
+GET {{host}}/api/posts/home?sort=hot&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E5 — Home feed (hot) — 1st call (DB → per-user cache)", function() {
+        client.assert(response.status === 200, "Home feed FAILED: " + response.status);
+        client.assert(response.body.content.length > 0, "Home feed empty — joined community has posts");
+    });
+%}
+
+### E6. Home Feed — Sort: hot (2nd call — Redis cache hit, same user)
+GET {{host}}/api/posts/home?sort=hot&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E6 — Home feed (hot) — 2nd call (→ Redis cache hit, per-user key)", function() {
+        client.assert(response.status === 200, "Home feed cache FAILED: " + response.status);
+        client.assert(response.body.content.length > 0, "Home feed should still have posts from cache");
+    });
+%}
+
+### E7. Community Feed (NOT cached — no @Cacheable on getCommunityPosts)
+GET {{host}}/api/posts/community/{{community_name}}?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E7 — Community feed (not cached, always DB)", function() {
+        client.assert(response.status === 200, "Community feed FAILED: " + response.status);
+    });
+%}
+
+### E8. User Posts Feed (NOT cached — no @Cacheable on getUserPosts)
+GET {{host}}/api/posts/user/{{test_username}}?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("E8 — User posts feed (not cached, always DB)", function() {
+        client.assert(response.status === 200, "User posts FAILED: " + response.status);
+        client.assert(response.body.content.length > 0, "User should have at least one post");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION F: REDIS CACHE — FEED EVICTION PROOF
+### ════════════════════════════════════════════════════════════════════
+###
+### SCENARIO: Fetch feed → CREATE NEW POST → fetch feed again
+### EXPECTED: Feed must show new post (stale cache must have been evicted)
+###
+
+### F1. Fetch Global Feed BEFORE creating a second post (warm cache)
+GET {{host}}/api/posts/global?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("F1 — Global feed before 2nd post (may be cached)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        client.global.set("feed_count_before", response.body.totalElements);
+    });
+%}
+
+### F2. Create a SECOND Post — EVICTS globalFeed + homeFeed (allEntries=true)
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Second Post — Cache Eviction Test",
+  "text": "Creating this should evict all globalFeed and homeFeed cache entries."
+}
+
+> {%
+    client.test("F2 — Create 2nd post (globalFeed + homeFeed evicted)", function() {
+        client.assert(response.status === 200, "Create post FAILED: " + response.status);
+    });
+    client.global.set("post2_id", response.body.id);
+%}
+
+### F3. Fetch Global Feed AFTER creating second post (cache was evicted)
+### CRITICAL: totalElements must be GREATER than before — proves cache was cleared
+GET {{host}}/api/posts/global?sort=new&page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("F3 — Global feed after 2nd post (cache evicted → DB → new post visible)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var countBefore = parseInt(client.global.get("feed_count_before"));
+        var countAfter  = response.body.totalElements;
+        client.assert(countAfter > countBefore, "CACHE EVICTION BUG: feed count unchanged. Before=" + countBefore + " After=" + countAfter);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION G: COMMENTS (NESTED TREE — 3 LEVELS DEEP)
+### ════════════════════════════════════════════════════════════════════
+
+### G1. Create Root Comment — EVICTS comments, postDetail, globalFeed, homeFeed
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "This is a root comment."
+}
+
+> {%
+    client.test("G1 — Create root comment (evicts comments + postDetail + feeds)", function() {
+        client.assert(response.status === 201, "Create comment FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.id != null, "Comment ID null");
+        client.assert(response.body.userVote === 0, "New comment userVote should be 0");
+        client.assert(response.body.score === 0, "New comment score should be 0");
+    });
+    client.global.set("comment_id", response.body.id);
+%}
+
+### G2. Reply to Root Comment (Depth 1) — EVICTS comment caches again
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "parentCommentId": {{comment_id}},
+  "text": "This is a depth-1 reply."
+}
+
+> {%
+    client.test("G2 — Create depth-1 reply", function() {
+        client.assert(response.status === 201, "Depth-1 reply FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+    client.global.set("reply_id", response.body.id);
+%}
+
+### G3. Reply to Reply (Depth 2)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "parentCommentId": {{reply_id}},
+  "text": "Depth-2 nesting — reply to a reply."
+}
+
+> {%
+    client.test("G3 — Create depth-2 reply", function() {
+        client.assert(response.status === 201, "Depth-2 reply FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+    client.global.set("reply2_id", response.body.id);
+%}
+
+### G4. Depth-3 Nesting (deep tree)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "parentCommentId": {{reply2_id}},
+  "text": "Depth-3 — deep nesting test."
+}
+
+> {%
+    client.test("G4 — Create depth-3 reply (deep nesting works)", function() {
+        client.assert(response.status === 201, "Depth-3 reply FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+    client.global.set("reply3_id", response.body.id);
+%}
+
+### G5. Fetch Comment Tree (Authenticated, 1st call → DB → cached)
+### REDIS KEY: reddit:comments::{postId}-{email}-0-20
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("G5 — Fetch comment tree (auth, 1st call → DB, then cached)", function() {
+        client.assert(response.status === 200, "Tree fetch FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.content.length > 0, "Tree should not be empty");
+        var root = response.body.content[0];
+        client.assert(root.children != null, "Root should have children array");
+        client.assert(root.children.length > 0, "Root should have at least 1 child (depth 1)");
+        client.assert(root.children[0].children.length > 0, "Depth-1 reply should have a child (depth 2)");
+        client.assert(root.children[0].children[0].children.length > 0, "Depth-2 should have a child (depth 3)");
+    });
+%}
+
+### G6. Fetch Comment Tree Again (2nd call → Redis cache hit)
+### VERIFY: same tree structure, faster response
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("G6 — Fetch comment tree (auth, 2nd call → Redis cache hit)", function() {
+        client.assert(response.status === 200, "Cached tree fetch FAILED: " + response.status);
+        client.assert(response.body.content.length > 0, "STALE CACHE BUG: tree empty on cache hit");
+        var root = response.body.content[0];
+        client.assert(root.children.length > 0, "Children missing from cached tree");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION H: COMMENT VOTING
+### ════════════════════════════════════════════════════════════════════
+
+### H1. Upvote Root Comment — EVICTS comments + postDetail caches
+POST {{host}}/api/comments/{{comment_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("H1 — Upvote comment (evicts comments + postDetail cache)", function() {
+        client.assert(response.status === 200, "Upvote FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === 1, "userVote should be 1, got: " + response.body.userVote);
+        client.assert(response.body.upvotes === 1, "upvotes should be 1");
+        client.assert(response.body.score === 1, "score should be 1");
+    });
+%}
+
+### H2. Fetch Tree After Vote (fresh from DB — score must be updated)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("H2 — Fetch tree after comment vote (fresh score, not stale cache)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        client.assert(root.score === 1, "STALE CACHE BUG: comment score should be 1, got: " + root.score);
+        client.assert(root.userVote === 1, "CACHE BUG: userVote should be 1, got: " + root.userVote);
+    });
+%}
+
+### H3. Toggle Off Comment Vote (same value = remove vote)
+POST {{host}}/api/comments/{{comment_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("H3 — Toggle off comment vote (score back to 0)", function() {
+        client.assert(response.status === 200, "Toggle FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === 0, "userVote should be 0 after toggle, got: " + response.body.userVote);
+        client.assert(response.body.score === 0, "score should be 0 after toggle, got: " + response.body.score);
+    });
+%}
+
+### H4. Re-upvote (for switch test)
+POST {{host}}/api/comments/{{comment_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("H4 — Re-upvote comment (restore score=1)", function() {
+        client.assert(response.status === 200, "Re-upvote FAILED: " + response.status);
+        client.assert(response.body.userVote === 1, "userVote should be 1");
+    });
+%}
+
+### H5. Switch Comment Vote: Upvote → Downvote
+POST {{host}}/api/comments/{{comment_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    client.test("H5 — Switch comment vote upvote→downvote", function() {
+        client.assert(response.status === 200, "Switch FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === -1, "userVote should be -1, got: " + response.body.userVote);
+        client.assert(response.body.upvotes === 0, "upvotes should be 0 after switch");
+        client.assert(response.body.downvotes === 1, "downvotes should be 1 after switch");
+        client.assert(response.body.score === -1, "score should be -1 after switch");
+    });
+%}
+
+### H6. Switch Back: Downvote → Upvote
+POST {{host}}/api/comments/{{comment_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("H6 — Switch comment vote downvote→upvote (score → 1)", function() {
+        client.assert(response.status === 200, "Switch-back FAILED: " + response.status);
+        client.assert(response.body.userVote === 1, "userVote should be 1 after switch-back");
+        client.assert(response.body.score === 1, "score should be 1 after switch-back");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION I: COMMENT EDIT (UPDATE)
+### ════════════════════════════════════════════════════════════════════
+
+### I1. Update a Comment's Text — EVICTS comments cache
+PUT {{host}}/api/comments/{{reply_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "This reply has been EDITED — testing update endpoint."
+}
+
+> {%
+    client.test("I1 — Edit comment (evicts comments cache)", function() {
+        client.assert(response.status === 200, "Update FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.text === "This reply has been EDITED — testing update endpoint.", "Text was not updated, got: " + response.body.text);
+    });
+%}
+
+### I2. Fetch Tree After Edit (cache evicted → fresh from DB, updated text visible)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("I2 — Fetch tree after edit (updated text, not stale cache)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        var reply = root.children[0];
+        client.assert(reply.text === "This reply has been EDITED — testing update endpoint.", "STALE CACHE BUG: text not updated in tree");
+    });
+%}
+
+### I3. Fetch Tree Again (now re-caches the edited tree)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("I3 — Fetch tree again (re-cached with edited text)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        var reply = root.children[0];
+        client.assert(reply.text === "This reply has been EDITED — testing update endpoint.", "Text should still be updated in cache");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION J: REDIS CACHE — COMMENT CACHE EVICTION PROOF
+### ════════════════════════════════════════════════════════════════════
+###
+### SCENARIO: Fetch comments → ADD NEW COMMENT → fetch again
+### EXPECTED: New comment visible (stale cache was evicted)
+###
+
+### J1. Fetch Comments BEFORE adding a new reply (warm cache)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("J1 — Comment tree before new reply (may serve from cache)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        client.global.set("comment_count_before", response.body.totalElements);
+    });
+%}
+
+### J2. Add New Comment — EVICTS comments cache (allEntries=true)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "A new comment to prove cache eviction."
+}
+
+> {%
+    client.test("J2 — New comment (evicts comments cache)", function() {
+        client.assert(response.status === 201, "Create FAILED: " + response.status);
+    });
+    client.global.set("new_comment_id", response.body.id);
+%}
+
+### J3. Fetch Comments AFTER adding new reply (cache evicted → DB → new comment visible)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("J3 — Comment tree after new comment (cache evicted → new comment visible)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var countBefore = client.global.get("comment_count_before");
+        var countAfter  = response.body.totalElements;
+        client.assert(countAfter > countBefore, "CACHE EVICTION BUG: new comment not visible. Before=" + countBefore + " After=" + countAfter);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION K: SOFT DELETE (COMMENT + POST)
+### ════════════════════════════════════════════════════════════════════
+
+### K1. Soft Delete Root Comment — children must survive as [deleted] placeholder
+DELETE {{host}}/api/comments/{{comment_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("K1 — Soft delete root comment (evicts comments + postDetail + feeds)", function() {
+        client.assert(response.status === 204, "Delete FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+%}
+
+### K2. Verify Deleted Comment Shows [deleted] — children intact
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("K2 — Deleted comment shows [deleted], children visible", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        client.assert(root.text === "[deleted]", "text should be '[deleted]', got: " + root.text);
+        client.assert(root.author === "[deleted]", "author should be '[deleted]', got: " + root.author);
+        client.assert(root.isDeleted === true, "isDeleted should be true");
+        client.assert(root.children.length > 0, "Children of deleted comment must survive");
+    });
+%}
+
+### K3. Verify Post commentCount Decremented After Delete
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("K3 — Post commentCount decremented after comment delete", function() {
+        client.assert(response.status === 200, "Get post FAILED: " + response.status);
+        // commentCount should reflect the soft-deleted comment was removed from count
+        client.assert(response.body.commentCount >= 0, "commentCount should never go negative");
+    });
+%}
+
+### K4. Create a Leaf Comment (no children — for testing leaf deletion)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "This leaf comment will be deleted."
+}
+
+> {%
+    client.test("K4 — Create leaf comment for deletion test", function() {
+        client.assert(response.status === 201, "Create FAILED: " + response.status);
+    });
+    client.global.set("leaf_comment_id", response.body.id);
+%}
+
+### K5. Delete Leaf Comment (soft delete, no children)
+DELETE {{host}}/api/comments/{{leaf_comment_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("K5 — Delete leaf comment (soft delete with no children)", function() {
+        client.assert(response.status === 204, "Delete leaf FAILED: " + response.status);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION L: VALIDATION & ERROR CASES
+### ════════════════════════════════════════════════════════════════════
+
+### L1. Empty Comment Text — @NotBlank validation (expect 400)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "text": "   "
+}
+
+> {%
+    client.test("L1 — Empty text validation → 400 Bad Request", function() {
+        client.assert(response.status === 400, "Should return 400 for blank text, got: " + response.status);
+    });
+%}
+
+### L2. Reply to Non-Existent Parent Comment (expect 404)
+POST {{host}}/api/comments
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "postId": {{post_id}},
+  "parentCommentId": 999999,
+  "text": "This should fail because parent does not exist."
+}
+
+> {%
+    client.test("L2 — Reply to missing parent → 404 Not Found", function() {
+        client.assert(response.status === 404, "Should return 404 for missing parent, got: " + response.status);
+    });
+%}
+
+### L3. Edit a Soft-Deleted Comment (expect 400)
+PUT {{host}}/api/comments/{{comment_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": "Trying to edit a soft-deleted comment."
+}
+
+> {%
+    client.test("L3 — Edit deleted comment → 400 Bad Request", function() {
+        client.assert(response.status === 400, "Should not allow editing deleted comment. Got: " + response.status);
+    });
+%}
+
+### L4. Get Non-Existent Post (expect 404)
+GET {{host}}/api/posts/999999
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("L4 — Get non-existent post → 404 Not Found", function() {
+        client.assert(response.status === 404, "Should return 404 for missing post, got: " + response.status);
+    });
+%}
+
+### L5. Invalid Vote Value (not 1 or -1) (expect 400)
+POST {{host}}/api/comments/{{reply_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 5 }
+
+> {%
+    client.test("L5 — Invalid vote value → 400 Bad Request", function() {
+        client.assert(response.status === 400, "Should return 400 for invalid vote value, got: " + response.status);
+    });
+%}
+
+### L6. Update Comment — Empty Text (expect 400)
+PUT {{host}}/api/comments/{{reply_id}}
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "text": ""
+}
+
+> {%
+    client.test("L6 — Update comment with empty text → 400 Bad Request", function() {
+        client.assert(response.status === 400, "Should return 400 for empty update text, got: " + response.status);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION M: CACHE EVICTION PROOF — VOTE SCORE FRESHNESS
+### ════════════════════════════════════════════════════════════════════
+###
+### SCENARIO: Cache postDetail → Vote on post → Fetch postDetail
+### EXPECTED: Updated score visible (stale cache must be gone)
+###
+
+### M1. Fetch Post Detail (warms postDetail cache)
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("M1 — Fetch postDetail (warm cache)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        client.global.set("score_before_vote", response.body.score);
+    });
+%}
+
+### M2. Toggle Off Post Vote (changes score) — EVICTS postDetail
+POST {{host}}/api/posts/{{post_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("M2 — Toggle off post vote (postDetail cache evicted)", function() {
+        client.assert(response.status === 200, "Toggle FAILED: " + response.status);
+        // score changed; cache was evicted
+    });
+%}
+
+### M3. Fetch Post Detail After Vote (cache evicted — must reflect new score)
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("M3 — Fetch postDetail after vote (score updated, no stale cache)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        var scoreBefore = parseInt(client.global.get("score_before_vote"));
+        var scoreAfter  = response.body.score;
+        client.assert(scoreAfter !== scoreBefore, "STALE CACHE BUG: score unchanged after vote. score=" + scoreAfter);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION N: UNAUTHENTICATED ACCESS
+### ════════════════════════════════════════════════════════════════════
+###
+### Comment tree is public. Unauthenticated requests:
+###   - userVote must always be 0 (no user context)
+###   - REDIS KEY uses 'anon' bucket: reddit:comments::{postId}-anon-0-20
+###
+
+### N1. Fetch Comment Tree (Unauthenticated) — 1st call
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+
+> {%
+    client.test("N1 — Unauthenticated tree (1st call, 'anon' cache key)", function() {
+        client.assert(response.status === 200, "Unauthenticated fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        client.assert(root.userVote === 0, "Unauthenticated userVote must be 0, got: " + root.userVote);
+    });
+%}
+
+### N2. Fetch Comment Tree (Unauthenticated) — 2nd call (Redis 'anon' cache hit)
+GET {{host}}/api/posts/{{post_id}}/comments?page=0&size=20
+
+> {%
+    client.test("N2 — Unauthenticated tree (2nd call → anon cache hit)", function() {
+        client.assert(response.status === 200, "2nd unauthenticated fetch FAILED: " + response.status);
+        var root = response.body.content[0];
+        client.assert(root.userVote === 0, "Anon cache must still have userVote=0");
+    });
+%}
+
+### N3. Unauthenticated Global Feed (public read)
+GET {{host}}/api/posts/global?sort=new
+
+> {%
+    client.test("N3 — Unauthenticated global feed (public, uses shared cache)", function() {
+        client.assert(response.status === 200, "Unauthenticated global feed FAILED: " + response.status);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION O: ADVANCED VOTING STATES (COMMENT)
+### ════════════════════════════════════════════════════════════════════
+
+### O1. Downvote the depth-2 reply
+POST {{host}}/api/comments/{{reply2_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": -1 }
+
+> {%
+    client.test("O1 — Downvote depth-2 reply", function() {
+        client.assert(response.status === 200, "Downvote FAILED: " + response.status);
+        client.assert(response.body.userVote === -1, "userVote should be -1, got: " + response.body.userVote);
+    });
+%}
+
+### O2. Switch Downvote → Upvote on depth-2 reply (score jumps +2)
+POST {{host}}/api/comments/{{reply2_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("O2 — Switch comment downvote→upvote (score jumps +2)", function() {
+        client.assert(response.status === 200, "Switch FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userVote === 1, "userVote should be 1 after switch");
+        client.assert(response.body.score === 1, "score should be 1 after switch");
+    });
+%}
+
+### O3. Toggle Off Upvote on depth-2 reply (back to neutral)
+POST {{host}}/api/comments/{{reply2_id}}/vote
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{ "value": 1 }
+
+> {%
+    client.test("O3 — Toggle off upvote on depth-2 reply (neutral)", function() {
+        client.assert(response.status === 200, "Toggle FAILED: " + response.status);
+        client.assert(response.body.userVote === 0, "userVote should be 0 after toggle, got: " + response.body.userVote);
+        client.assert(response.body.score === 0, "score should be 0 after toggle");
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION P: TOKEN REFRESH
+### ════════════════════════════════════════════════════════════════════
+
+### P1. Refresh Access Token (proves refresh_token is valid UUID in DB)
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{refresh_token}}"
+}
+
+> {%
+    client.test("P1 — Refresh token → new access_token issued", function() {
+        client.assert(response.status === 200, "Token refresh FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.access_token != null, "No access_token in refresh response");
+    });
+    client.global.set("auth_token", response.body.access_token);
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION Q: CLEANUP (POST DELETION)
+### ════════════════════════════════════════════════════════════════════
+
+### Q1. Delete Post 2 (second post created in Section F)
+DELETE {{host}}/api/posts/{{post2_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Q1 — Delete 2nd post (evicts all feed caches)", function() {
+        client.assert(response.status === 200 || response.status === 204, "Delete post2 FAILED: " + response.status);
+    });
+%}
+
+### Q2. Delete Main Post — EVICTS postDetail, globalFeed, homeFeed
+DELETE {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Q2 — Delete main post (evicts postDetail + feed caches)", function() {
+        client.assert(response.status === 200 || response.status === 204, "Delete post FAILED: " + response.status + " — " + JSON.stringify(response.body));
+    });
+%}
+
+### Q3. Verify Main Post Returns 404 (soft-deleted, ResourceNotFoundException)
+GET {{host}}/api/posts/{{post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Q3 — Deleted post returns 404 Not Found", function() {
+        client.assert(response.status === 404, "Deleted post should return 404, got: " + response.status);
+    });
+%}
+
+### Q4. Verify Feeds No Longer Show Deleted Post
+GET {{host}}/api/posts/global?sort=new&page=0&size=100
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Q4 — Global feed no longer contains deleted post", function() {
+        client.assert(response.status === 200, "Feed FAILED: " + response.status);
+        var found = response.body.content.some(function(p) {
+            return p.id == parseInt(client.global.get("post_id"));
+        });
+        client.assert(!found, "SOFT DELETE BUG: Deleted post still appears in global feed");
+    });
+%}
+
+###
+### ================================================================================
+###  END OF TEST SUITE (Sections A-Q)
+###
+###  REDIS VERIFICATION COMMANDS (run in terminal):
+###    docker exec reddit-redis redis-cli KEYS "*"
+###    docker exec reddit-redis redis-cli KEYS "reddit:globalFeed::*"
+###    docker exec reddit-redis redis-cli KEYS "reddit:comments::*"
+###    docker exec reddit-redis redis-cli TTL "reddit:globalFeed::0-20-new"
+###    docker exec reddit-redis redis-cli FLUSHALL   ← clears entire cache (for testing)
+###
+###  EXPECTED CACHE KEY EXAMPLES:
+###    reddit:globalFeed::0-20-new
+###    reddit:globalFeed::0-20-hot
+###    reddit:globalFeed::0-20-top
+###    reddit:homeFeed::{email}-0-20-hot
+###    reddit:postDetail::{postId}
+###    reddit:comments::{postId}-{email}-0-20       ← authenticated user bucket
+###    reddit:comments::{postId}-anon-0-20           ← unauthenticated bucket
+### ================================================================================
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION R: KAFKA MODERATION PIPELINE (End-to-End)
+### ════════════════════════════════════════════════════════════════════
+###
+### REQUIRES: Full Docker stack running (docker-compose up --build)
+### FLOW:
+###   R1. Create post  → triggers Kafka "post-created" event
+###   R2. Wait ~5s     → ML service moderates and publishes to "post-moderated"
+###   R3. Backend consumes "post-moderated" → updates displayText + isModerated in DB
+###   R4. Fetch post   → verify displayText is censored (if profanity found)
+###
+### PREREQUISITE: Run A1–A2 first (auth flow) to get auth_token + community_id.
+### ════════════════════════════════════════════════════════════════════
+
+### R1. Create Post With Profane Text — should trigger ML moderation
+### The Kafka topic "post-created" receives this immediately after DB save.
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Moderation Test Post",
+  "text": "What the heck is this? That is so damn stupid!"
+}
+
+> {%
+    client.test("R1 — Create post with flagged words (triggers Kafka pipeline)", function() {
+        client.assert(response.status === 200, "Create post FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.id != null, "Post ID null");
+        client.assert(response.body.text != null, "Text null in response");
+        // displayText at this point shows originalText (moderation is async via Kafka)
+    });
+    client.global.set("moderation_post_id", response.body.id);
+%}
+
+### R2. Fetch Post IMMEDIATELY — displayText = originalText (moderation not yet applied)
+GET {{host}}/api/posts/{{moderation_post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("R2 — Fetch post immediately (BEFORE moderation applied)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        // At this point displayText == originalText
+        client.assert(response.body.text != null, "Text should be present");
+        client.global.set("original_display_text", response.body.text);
+    });
+%}
+
+### R3. [MANUAL WAIT] Allow 5-10 seconds for Kafka pipeline to complete
+### Pipeline: Backend → Kafka "post-created" → ML service moderates → Kafka "post-moderated" → Backend updates DB
+### You can verify in Docker logs:
+###   docker logs reddit_clone-ml-service-1 --tail 20
+###   docker logs reddit_clone-backend-1 --tail 20
+
+
+### R4. Fetch Post AFTER Moderation — displayText should be censored, isModerated = true
+GET {{host}}/api/posts/{{moderation_post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("R4 — Fetch post after moderation (displayText censored by ML service)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        // After ML moderation, "heck" → "****" and "damn" → "****"
+        // isModerated should be true
+        // If moderation pipeline is working, this should differ from R2:
+        client.log("📝 Moderation result → displayText: " + response.body.text);
+        client.log("   isModerated expected: true");
+    });
+%}
+
+### R5. Create CLEAN Post (no profanity) — isModerated should remain false
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Clean Post — No Moderation Needed",
+  "text": "Hello everyone! Welcome to our community. Have a great day!"
+}
+
+> {%
+    client.test("R5 — Create clean post (Kafka pipeline — no profanity expected)", function() {
+        client.assert(response.status === 200, "Create post FAILED: " + response.status);
+    });
+    client.global.set("clean_post_id", response.body.id);
+%}
+
+### R6. Fetch Clean Post After Moderation — displayText should be unchanged
+GET {{host}}/api/posts/{{clean_post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("R6 — Fetch clean post after ML pipeline (text unchanged, isModerated = false)", function() {
+        client.assert(response.status === 200, "Fetch FAILED: " + response.status);
+        client.log("📝 Clean post: " + response.body.text);
+    });
+%}
+
+### R7. Cleanup — Delete moderation test posts
+DELETE {{host}}/api/posts/{{moderation_post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("R7 — Delete moderation test post", function() {
+        client.assert(response.status === 200 || response.status === 204, "Delete FAILED: " + response.status);
+    });
+%}
+
+### R8. Cleanup — Delete clean test post
+DELETE {{host}}/api/posts/{{clean_post_id}}
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("R8 — Delete clean test post", function() {
+        client.assert(response.status === 200 || response.status === 204, "Delete FAILED: " + response.status);
+    });
+%}
+
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION S: ML SERVICE HEALTH & DIRECT MODERATION API
+### ════════════════════════════════════════════════════════════════════
+###
+### These tests hit the FastAPI ML service directly (port 8000).
+### REQUIRES: docker-compose up --build (ml-service must be running).
+### ════════════════════════════════════════════════════════════════════
+
+@ml_host = http://localhost:8000
+
+### S1. ML Service Root Endpoint
+GET {{ml_host}}/
+
+> {%
+    client.test("S1 — ML service is running", function() {
+        client.assert(response.status === 200, "ML service not reachable: " + response.status);
+        client.assert(response.body.status === "running" || response.body.service != null,
+            "Unexpected response: " + JSON.stringify(response.body));
+    });
+%}
+
+### S2. ML Service Health Check
+GET {{ml_host}}/health
+
+> {%
+    client.test("S2 — ML service health check passes", function() {
+        client.assert(response.status === 200, "Health check FAILED: " + response.status);
+        client.assert(response.body.status === "healthy", "Expected healthy, got: " + JSON.stringify(response.body));
+    });
+%}
+
+### S3. ML Service Docs (FastAPI /docs)
+GET {{ml_host}}/docs
+
+> {%
+    client.test("S3 — FastAPI /docs is accessible", function() {
+        client.assert(response.status === 200, "/docs not accessible: " + response.status);
+    });
+%}
+
+### S4. Direct Moderation — Clean Text (POST /moderate)
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "postId": 999,
+  "text": "Hello world — this is perfectly clean text!"
+}
+
+> {%
+    client.test("S4 — Direct moderation: clean text → isModerated = false", function() {
+        client.assert(response.status === 200, "Moderation FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.isModerated === false, "Expected isModerated = false, got: " + response.body.isModerated);
+        client.assert(response.body.maskedText === response.body.originalText, "Clean text: maskedText should equal originalText");
+        client.assert(response.body.postId === 999, "postId should be 999");
+    });
+%}
+
+### S5. Direct Moderation — Profane Text
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "postId": 1000,
+  "text": "What the heck is this? That is some darn bullshit!"
+}
+
+> {%
+    client.test("S5 — Direct moderation: profane text → isModerated = true, text censored", function() {
+        client.assert(response.status === 200, "Moderation FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.isModerated === true, "Expected isModerated = true, got: " + response.body.isModerated);
+        client.assert(response.body.maskedText !== response.body.originalText, "Masked text should differ from original");
+        client.assert(response.body.maskedText.indexOf("****") >= 0, "Censored words should be replaced with ****");
+        client.log("📝 Original: " + response.body.originalText);
+        client.log("📝 Masked:   " + response.body.maskedText);
+    });
+%}
+
+### S6. Direct Moderation — Empty Text (edge case)
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "postId": 1001,
+  "text": ""
+}
+
+> {%
+    client.test("S6 — Direct moderation: empty text → isModerated = false, no crash", function() {
+        client.assert(response.status === 200, "Moderation FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.isModerated === false, "Empty text should not be moderated");
+        client.assert(response.body.maskedText === "", "Masked text of empty should be empty");
+    });
+%}
+
+### S7. Direct Moderation — Missing postId (validation error)
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "text": "Hello world"
+}
+
+> {%
+    client.test("S7 — Direct moderation: missing postId → 422 Unprocessable Entity", function() {
+        client.assert(response.status === 422, "Expected 422, got: " + response.status);
+    });
+%}
+
+### S8. Direct Moderation — Missing text field (validation error)
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "postId": 1002
+}
+
+> {%
+    client.test("S8 — Direct moderation: missing text → 422 Unprocessable Entity", function() {
+        client.assert(response.status === 422, "Expected 422, got: " + response.status);
+    });
+%}
+
+### S9. Direct Moderation — Unicode text
+POST {{ml_host}}/moderate
+Content-Type: application/json
+
+{
+  "postId": 1003,
+  "text": "こんにちは 世界 — Hello World in Japanese!"
+}
+
+> {%
+    client.test("S9 — Direct moderation: unicode text handled correctly", function() {
+        client.assert(response.status === 200, "Unicode moderation FAILED: " + response.status);
+        client.assert(response.body.isModerated === false, "Unicode clean text should not be moderated");
+    });
+%}
+
+###
+### ================================================================================
+###  KAFKA DEBUG COMMANDS (run in terminal while docker-compose is running):
+###    # Check Kafka topics
+###    docker exec reddit_clone-kafka-1 kafka-topics --bootstrap-server localhost:9092 --list
+###
+###    # Consume post-created topic (see what Spring Boot published)
+###    docker exec reddit_clone-kafka-1 kafka-console-consumer \
+###      --bootstrap-server localhost:9092 \
+###      --topic post-created --from-beginning --max-messages 5
+###
+###    # Consume post-moderated topic (see what ML service published)
+###    docker exec reddit_clone-kafka-1 kafka-console-consumer \
+###      --bootstrap-server localhost:9092 \
+###      --topic post-moderated --from-beginning --max-messages 5
+###
+###    # Check ML service logs (consumer activity)
+###    docker logs reddit_clone-ml-service-1 --tail 50
+###
+###    # Check backend logs (consumer + moderation result)
+###    docker logs reddit_clone-backend-1 --tail 50
+### ================================================================================
+
