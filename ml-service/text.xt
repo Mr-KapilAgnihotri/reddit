@@ -1,0 +1,4 @@
+docker build -t ml-service .
+
+
+docker run --network reddit_clone_default -p 8000:8000 ml-service
