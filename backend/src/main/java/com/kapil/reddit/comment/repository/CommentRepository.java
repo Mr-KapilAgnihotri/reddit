@@ -12,10 +12,8 @@ import java.util.List;
 public interface CommentRepository extends JpaRepository<Comment, Long> {
 
     /**
-     * Fetches ALL non-deleted comments for a post in a SINGLE query.
-     * This is intentional — results are grouped into a tree in memory,
-     * preventing N+1 database calls regardless of nesting depth.
-     * Sorted by createdAt ASC for deterministic Reddit-style ordering.
+     * Fetches ALL non-deleted comments for a post in a SINGLE query (used for tree building).
+     * Sorted by createdAt ASC — children always appear in chronological order.
      */
     @Query("SELECT c FROM Comment c " +
            "JOIN FETCH c.author " +
@@ -23,15 +21,38 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
            "ORDER BY c.createdAt ASC")
     List<Comment> findAllByPostId(@Param("postId") Long postId);
 
+    // ─── Paginated root-level comment queries (sort variants) ─────────────────
+
+    /** sort=new — newest roots first. Tiebreaker on id DESC for deterministic pagination. */
+    @Query("SELECT c FROM Comment c " +
+           "JOIN FETCH c.author " +
+           "WHERE c.post.id = :postId AND c.parentComment IS NULL " +
+           "ORDER BY c.createdAt DESC, c.id DESC")
+    Page<Comment> findRootsByPostIdOrderByNew(@Param("postId") Long postId, Pageable pageable);
+
+    /** sort=old — oldest roots first. */
+    @Query("SELECT c FROM Comment c " +
+           "JOIN FETCH c.author " +
+           "WHERE c.post.id = :postId AND c.parentComment IS NULL " +
+           "ORDER BY c.createdAt ASC, c.id ASC")
+    Page<Comment> findRootsByPostIdOrderByOld(@Param("postId") Long postId, Pageable pageable);
+
     /**
-     * Paginated root-level comments only (no parent).
-     * Used to determine which roots to include in the response page,
-     * while all children are fetched via findAllByPostId.
-     * Deleted roots are included so their children remain visible.
+     * sort=top — highest net score first.
+     * Dual-column ORDER BY: score DESC, then createdAt DESC as tiebreaker.
+     * This guarantees deterministic, stable pagination when scores are equal.
      */
+    @Query("SELECT c FROM Comment c " +
+           "JOIN FETCH c.author " +
+           "WHERE c.post.id = :postId AND c.parentComment IS NULL " +
+           "ORDER BY c.score DESC, c.createdAt DESC")
+    Page<Comment> findRootsByPostIdOrderByTop(@Param("postId") Long postId, Pageable pageable);
+
+    // ─── Legacy default (kept for backward compatibility) ─────────────────────
     @Query("SELECT c FROM Comment c " +
            "JOIN FETCH c.author " +
            "WHERE c.post.id = :postId AND c.parentComment IS NULL " +
            "ORDER BY c.createdAt ASC")
     Page<Comment> findRootsByPostId(@Param("postId") Long postId, Pageable pageable);
 }
+

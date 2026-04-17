@@ -33,6 +33,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/users").permitAll()
+                        // ── Admin endpoints (defence-in-depth: URL + @PreAuthorize) ──
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // ── User profile — public read, auth for write ──
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/users/*/profile").permitAll()
+                        .requestMatchers("/api/users/me/**").authenticated()
                         .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/api/communities/**").authenticated()
                         // ── Public read access (Reddit-style: no login required to browse) ──
@@ -43,6 +48,8 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/community/**").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/user/**").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*").permitAll()
+                        // ── Recommendation feed requires authentication ──
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/recommended").authenticated()
                         // ── All writes (POST, PUT, DELETE) require authentication ──
                         .requestMatchers("/api/comments/**").authenticated()
                         .requestMatchers("/api/posts/**").authenticated()

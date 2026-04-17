@@ -125,10 +125,10 @@ public class CommentService {
      */
     @Cacheable(
             value = "comments",
-            key   = "#postId + '-' + (#email != null ? #email.toLowerCase().trim() : 'anon') + '-' + #page + '-' + #size"
+            key   = "#postId + '-' + (#email != null ? #email.toLowerCase().trim() : 'anon') + '-' + #page + '-' + #size + '-' + #sort"
     )
     @Transactional(readOnly = true)
-    public Page<CommentResponse> getCommentsForPost(Long postId, String email, int page, int size) {
+    public Page<CommentResponse> getCommentsForPost(Long postId, String email, int page, int size, String sort) {
 
         if (!postRepository.existsById(postId)) {
             throw new BusinessException("Post not found");
@@ -136,8 +136,14 @@ public class CommentService {
 
         Pageable pageable = PageRequest.of(page, size);
 
-        // 1. Paginated roots (author JOIN FETCHed inside query)
-        Page<Comment> rootPage = commentRepository.findRootsByPostId(postId, pageable);
+        // 1. Paginated roots — dispatch to sort-specific query
+        //    All queries use a secondary sort column to guarantee deterministic pagination
+        //    when the primary sort column contains ties (e.g. multiple comments with score=0).
+        Page<Comment> rootPage = switch (sort.toLowerCase()) {
+            case "top"  -> commentRepository.findRootsByPostIdOrderByTop(postId, pageable);
+            case "old"  -> commentRepository.findRootsByPostIdOrderByOld(postId, pageable);
+            default     -> commentRepository.findRootsByPostIdOrderByNew(postId, pageable); // "new" + unknown → newest first
+        };
 
         if (rootPage.isEmpty()) {
             return Page.empty(pageable);

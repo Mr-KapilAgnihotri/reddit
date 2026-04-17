@@ -42,6 +42,10 @@ public class User {
     @Column(name = "is_verified", nullable = false)
     private Boolean isVerified = false;
 
+    /** Reason provided by admin when banning. Null when not banned. */
+    @Column(name = "ban_reason", columnDefinition = "TEXT")
+    private String banReason;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -67,8 +71,5 @@ public class User {
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
     }
-
-
-
-
 }
+

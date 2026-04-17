@@ -5,5 +5,6 @@ import os
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:29092")
 
 # Topic names — must match Spring Boot exactly
-POST_TOPIC = "post-created"
-RESULT_TOPIC = "post-moderated"
+POST_TOPIC      = "post-created"
+RESULT_TOPIC    = "post-moderated"
+EMBEDDING_TOPIC = "post-embedding"   # Spring consumes this to store vector(384) in posts

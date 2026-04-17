@@ -5,7 +5,8 @@ import logging
 
 from app.config import KAFKA_BOOTSTRAP, POST_TOPIC
 from app.moderation import process_text
-from app.producer import send_result
+from app.producer import send_result, send_embedding
+from app.embedder import generate_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,16 @@ def start_consumer():
                     result = process_text(data)
                     logger.info("🧠 Moderation result: %s", result)
                     send_result(result)
+
+                    # Generate Embedding
+                    post_id = data.get("postId")
+                    text = data.get("text", "")
+                    logger.info(f"Generating embedding for postId={post_id} ...")
+                    emb_vector = generate_embedding(text)
+                    send_embedding({
+                        "postId": post_id,
+                        "embedding": emb_vector
+                    })
                 except Exception as processing_exc:
                     logger.exception(
                         "Error processing message for postId=%s: %s",

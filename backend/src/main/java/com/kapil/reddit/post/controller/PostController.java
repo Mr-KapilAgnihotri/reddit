@@ -96,4 +96,19 @@ public class PostController {
     ) {
         return postService.getCommunityPosts(getEmail(authentication), name, page, size, sort);
     }
+
+    /**
+     * Personalized recommendation feed using PGVector cosine similarity.
+     * Requires authentication. Falls back to global (newest) feed if the user
+     * has no upvoted/saved posts with embeddings yet.
+     */
+    @GetMapping("/recommended")
+    public Page<PostResponse> recommendedFeed(
+            Authentication authentication,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return postService.getRecommendedFeed(authentication.getName(), page, size);
+    }
 }
+

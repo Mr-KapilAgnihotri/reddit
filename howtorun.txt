@@ -1,0 +1,101 @@
+=========================================================
+      HOW TO RUN THE REDDIT CLONE (FULL STACK)
+=========================================================
+
+This guide outlines how to build and run the entire Reddit Clone 
+architecture, which consists of:
+1. PostgreSQL (with pgvector extension)
+2. Redis (caching)
+3. Kafka (broker + zookeeper)
+4. Mailpit (local SMTP testing tool)
+5. Python ML Service (FastAPI + SentenceTransformers)
+6. Spring Boot Backend API (Java 21)
+
+---------------------------------------------------------
+1. HARDWARE & SOFTWARE REQUIREMENTS
+---------------------------------------------------------
+- Docker & Docker Compose (essential for infrastructure)
+- Java 21 SDK
+- Maven 3.9+
+- Python 3.10+
+- IntelliJ IDEA Ultimate (recommended to use the .http test suite safely)
+- At least 8GB RAM (16GB recommended as Kafka + Java + Python ML consume ~4GB naturally)
+
+---------------------------------------------------------
+2. STARTING THE INFRASTRUCTURE (Docker)
+---------------------------------------------------------
+All infrastructure dependencies (PostgreSQL + pgvector, Redis, Kafka, Zookeeper, Mailpit) 
+are bundled in the `docker-compose.yml` file.
+
+1. Open your terminal in the root of the project (where docker-compose.yml is located).
+2. Start the infrastructure in the background:
+   > docker-compose up -d postgres redis zookeeper kafka mailpit
+3. Verify they are running:
+   > docker-compose ps
+   Look for "Up" state on all 5 containers.
+
+Tip: The ML service can also be run via docker, or locally via venv. We recommend
+running it locally for easiest debugging.
+
+---------------------------------------------------------
+3. STARTING THE PYTHON ML SERVICE (Locally)
+---------------------------------------------------------
+The ML service runs FastAPI and uses `sentence-transformers` for embedding generation 
+and `better_profanity` for text moderation.
+
+1. Open a new terminal session.
+2. Navigate to the ml-service directory:
+   > cd ml-service
+3. Create a python virtual environment:
+   > python -m venv venv
+4. Activate the virtual environment:
+   - Windows: > venv\Scripts\activate
+   - Mac/Linux: > source venv/bin/activate
+5. Install dependencies:
+   > pip install -r requirements.txt
+6. Run the FastAPI development server:
+   - Note: We override KAFKA_BOOTSTRAP to point to exposed localhost port.
+   > set KAFKA_BOOTSTRAP=localhost:9092
+   > uvicorn app.main:app --reload --port 8000
+   
+The model weights (~90MB) will download on the first run. Keep this terminal open.
+
+---------------------------------------------------------
+4. STARTING THE SPRING BOOT BACKEND
+---------------------------------------------------------
+1. Open a new terminal session in the `backend` directory.
+   > cd backend
+2. Build the project (skip tests initially as DB is fresh):
+   > mvn clean install -DskipTests
+3. Run the Spring Boot application:
+   > mvn spring-boot:run
+   
+On startup, Flyway will automatically run all database migrations (V1 through V15),
+creating the tables, inserting default roles (USER, ADMIN), and configuring pgvector columns.
+The server will start on port 8080. Keep this terminal open.
+
+---------------------------------------------------------
+5. VERIFICATION / HOW TO TEST
+---------------------------------------------------------
+We have provided a comprehensive `reddit-api-tests.http` file inside the `backend` folder.
+
+1. Open `reddit-api-tests.http` inside IntelliJ IDEA.
+2. Run Section A1 (Register) and A2 (Login). The script will automatically store your `auth_token` 
+   in global variables.
+3. You can now execute any other section of the test suite (Post creation, Commenting, Voting,
+   Admin commands, etc).
+4. Check Mailpit at http://localhost:8025 to see verification and password reset emails.
+5. Create a post through the API containing bad words (e.g. "damn") — wait 5 seconds, 
+   fetch it again, and you'll see the ML pipeline has automatically censored it.
+6. Check your Personalized Recommended Feed using `GET /api/posts/recommended`. It uses
+   cosine similarity via pgvector based on the posts you have interacted with!
+
+---------------------------------------------------------
+6. TEARDOWN
+---------------------------------------------------------
+To stop and clean up everything:
+1. Press Ctrl+C in the Spring Boot terminal.
+2. Press Ctrl+C in the Python uvicorn terminal.
+3. Stop docker containers:
+   > docker-compose down
+   (Append `-v` if you wish to wipe the database and queues completely)

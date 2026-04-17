@@ -32,6 +32,7 @@ public class CommentController {
     // ─── GET /api/posts/{postId}/comments ─────────────────────────────────────
     /**
      * Returns a paginated, nested comment tree for a post.
+     * Sorting: new (newest first, default) | top (highest score first) | old (oldest first).
      * Authentication is OPTIONAL — unauthenticated callers receive userVote = 0.
      */
     @GetMapping("/api/posts/{postId}/comments")
@@ -39,10 +40,11 @@ public class CommentController {
             @PathVariable Long postId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "new") String sort,
             Authentication authentication // nullable — Spring injects null when unauthenticated
     ) {
         String email = authentication != null ? authentication.getName() : null;
-        return commentService.getCommentsForPost(postId, email, page, size);
+        return commentService.getCommentsForPost(postId, email, page, size, sort);
     }
 
     // ─── PUT /api/comments/{id} ────────────────────────────────────────────────

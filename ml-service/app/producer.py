@@ -55,3 +55,30 @@ def send_result(result: dict) -> None:
         logger.error("Failed to send result to Kafka for postId=%s: %s", result.get("postId"), exc)
     except Exception as exc:
         logger.exception("Unexpected error sending result for postId=%s: %s", result.get("postId"), exc)
+
+def send_embedding(result: dict) -> None:
+    """
+    Publish a generated text embedding to the ``post-embedding`` Kafka topic.
+
+    Expected schema:
+        {
+            "postId": int,
+            "embedding": list[float]
+        }
+    """
+    from app.config import EMBEDDING_TOPIC
+    try:
+        producer = _get_producer()
+        future = producer.send(EMBEDDING_TOPIC, result)
+        record_metadata = future.get(timeout=10)
+        logger.info(
+            "📤 Sent to '%s' | partition=%d offset=%d | postId=%s",
+            EMBEDDING_TOPIC,
+            record_metadata.partition,
+            record_metadata.offset,
+            result.get("postId"),
+        )
+    except KafkaError as exc:
+        logger.error("Failed to send embedding to Kafka for postId=%s: %s", result.get("postId"), exc)
+    except Exception as exc:
+        logger.exception("Unexpected error sending embedding for postId=%s: %s", result.get("postId"), exc)

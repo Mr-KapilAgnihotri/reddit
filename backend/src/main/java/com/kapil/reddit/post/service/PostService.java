@@ -18,6 +18,7 @@ import com.kapil.reddit.post.repository.PostMediaRepository;
 import com.kapil.reddit.post.repository.PostRepository;
 import com.kapil.reddit.post.vote.domain.PostVote;
 import com.kapil.reddit.post.vote.repository.PostVoteRepository;
+import com.kapil.reddit.post.repository.SavedPostRepository;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,7 @@ public class PostService {
     private final CommunityMemberRepository communityMemberRepository;
     private final PostVoteRepository postVoteRepository;
     private final PostProducer postProducer;
+    private final SavedPostRepository savedPostRepository;
 
     private Sort resolveSort(String sort) {
         if ("top".equalsIgnoreCase(sort)) {
@@ -346,5 +348,143 @@ public class PostService {
                 () -> log.warn("handleModerationResult: post not found for postId={} — ignoring",
                         event.getPostId())
         );
+    }
+
+    // ================= STORE EMBEDDING (from Kafka post-embedding topic) =================
+
+    /**
+     * Persists the 384-dimensional text embedding produced by the ML service.
+     * Called by {@link com.kapil.reddit.post.event.EmbeddingConsumer}.
+     * Idempotent — safe to re-call if the Kafka message is re-delivered.
+     */
+    @Transactional
+    public void storeEmbedding(com.kapil.reddit.post.event.EmbeddingEvent event) {
+        if (event == null || event.getPostId() == null || event.getEmbedding() == null) {
+            log.warn("storeEmbedding: invalid event — skipping");
+            return;
+        }
+        postRepository.findById(event.getPostId()).ifPresentOrElse(
+                post -> {
+                    // Convert List<Float> → float[]
+                    java.util.List<Float> list = event.getEmbedding();
+                    float[] arr = new float[list.size()];
+                    for (int i = 0; i < list.size(); i++) arr[i] = list.get(i);
+                    post.setEmbedding(arr);
+                    postRepository.save(post);
+                    log.info("Embedding stored | postId={} dim={}", event.getPostId(), arr.length);
+                },
+                () -> log.warn("storeEmbedding: post not found for postId={} — ignoring", event.getPostId())
+        );
+    }
+
+    // ================= RECOMMENDED FEED (PGVector cosine similarity) =================
+
+    /**
+     * Returns a personalized recommendation feed using PGVector cosine similarity.
+     *
+     * <p>Algorithm:
+     * <ol>
+     *   <li>Collect the user's last 5 upvoted AND all saved post IDs as "positive signals".</li>
+     *   <li>Fetch those posts' embeddings from the DB.</li>
+     *   <li>Average the embeddings into a single query vector.</li>
+     *   <li>Run a PGVector cosine similarity search to find the top-N most similar posts.</li>
+     *   <li>Exclude posts the user has already authored, upvoted, or saved (anti-join).</li>
+     * </ol>
+     *
+     * <p>If the user has no upvoted/saved posts with embeddings, falls back to the
+     * global feed (newest first).
+     */
+    @Transactional(readOnly = true)
+    public Page<PostResponse> getRecommendedFeed(String email, int page, int size) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        Long userId = user.getId();
+
+        // 1. Collect positive-signal post IDs (upvoted + saved)
+        java.util.List<Long> upvotedIds = postRepository.findUpvotedPostIdsByUserId(userId);
+        java.util.List<Long> savedIds   = savedPostRepository.findPostIdsByUserId(userId);
+
+        // Reference signals = up to last 5 upvoted + last 5 saved (deduplicated)
+        java.util.Set<Long> signalIds = new java.util.LinkedHashSet<>();
+        upvotedIds.stream().limit(5).forEach(signalIds::add);
+        savedIds.stream().limit(5).forEach(signalIds::add);
+
+        // 2. Build exclusion list: authored + upvoted + saved
+        java.util.Set<Long> excludedIds = new java.util.HashSet<>();
+        postRepository.findByAuthorIdAndIsDeletedFalse(userId, PageRequest.of(0, 200))
+                .getContent().stream().map(Post::getId).forEach(excludedIds::add);
+        excludedIds.addAll(upvotedIds);
+        excludedIds.addAll(savedIds);
+
+        // 3. Fetch reference embeddings
+        java.util.List<Post> referencePosts = signalIds.isEmpty()
+                ? java.util.List.of()
+                : postRepository.findByIdInWithEmbedding(java.util.List.copyOf(signalIds));
+
+        // 4. Average reference embeddings → query vector
+        float[] queryVector = averageEmbeddings(referencePosts);
+
+        if (queryVector == null) {
+            // No reference embeddings — fall back to global feed (newest first)
+            log.info("RecommendedFeed: no reference embeddings for user {} → fallback to global", email);
+            org.springframework.data.domain.Pageable pageable = PageRequest.of(page, size,
+                    Sort.by(Sort.Direction.DESC, "createdAt"));
+            return mapPosts(postRepository.findByIsDeletedFalse(pageable), userId);
+        }
+
+        // 5. Serialise as pgvector literal: "[f1,f2,...,f384]"
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < queryVector.length; i++) {
+            sb.append(queryVector[i]);
+            if (i < queryVector.length - 1) sb.append(',');
+        }
+        sb.append(']');
+        String pgVectorLiteral = sb.toString();
+
+        java.util.List<Long> excludedList = excludedIds.isEmpty()
+                ? java.util.List.of(-1L)   // dummy so IN clause is valid SQL
+                : java.util.List.copyOf(excludedIds);
+
+        // 6. Cosine similarity search via PGVector (native query in PostRepository)
+        int fetchLimit = (page + 1) * size + size;  // over-fetch to support pagination
+        java.util.List<Post> similar = postRepository.findSimilarPosts(
+                pgVectorLiteral,
+                excludedList,
+                excludedIds.size(),
+                fetchLimit
+        );
+
+        // 7. Manual pagination over the result list
+        int start = page * size;
+        int end   = Math.min(start + size, similar.size());
+        java.util.List<Post> pageContent = start >= similar.size()
+                ? java.util.List.of()
+                : similar.subList(start, end);
+
+        java.util.List<PostResponse> responses = pageContent.stream()
+                .map(p -> PostMapper.toResponse(p, p.getMedia(), getUserVote(p.getId(), userId)))
+                .toList();
+
+        return new org.springframework.data.domain.PageImpl<>(
+                responses,
+                PageRequest.of(page, size),
+                similar.size()
+        );
+    }
+
+    /** Averages the embeddings of the given posts. Returns null if none have embeddings. */
+    private float[] averageEmbeddings(java.util.List<Post> posts) {
+        java.util.List<float[]> embeddings = posts.stream()
+                .map(Post::getEmbedding)
+                .filter(e -> e != null && e.length == 384)
+                .toList();
+        if (embeddings.isEmpty()) return null;
+        float[] avg = new float[384];
+        for (float[] e : embeddings) {
+            for (int i = 0; i < 384; i++) avg[i] += e[i];
+        }
+        for (int i = 0; i < 384; i++) avg[i] /= embeddings.size();
+        return avg;
     }
 }

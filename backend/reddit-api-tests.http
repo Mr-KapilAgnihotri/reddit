@@ -1493,6 +1493,11 @@ Content-Type: application/json
 ###      --bootstrap-server localhost:9092 \
 ###      --topic post-moderated --from-beginning --max-messages 5
 ###
+###    # Consume post-embedding topic (see embeddings sent back to spring)
+###    docker exec reddit_clone-kafka-1 kafka-console-consumer \
+###      --bootstrap-server localhost:9092 \
+###      --topic post-embedding --from-beginning --max-messages 5
+###
 ###    # Check ML service logs (consumer activity)
 ###    docker logs reddit_clone-ml-service-1 --tail 50
 ###
@@ -1500,3 +1505,292 @@ Content-Type: application/json
 ###    docker logs reddit_clone-backend-1 --tail 50
 ### ================================================================================
 
+### ════════════════════════════════════════════════════════════════════
+###  SECTION T: ADMIN SETUP & BANNED USER GUARd
+### ════════════════════════════════════════════════════════════════════
+
+### T1. Login as Admin
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Password123!"
+}
+
+> {%
+    client.test("T1 — Admin Login (seeds config)", function() {
+        client.assert(response.status === 200, "Admin login FAILED");
+        client.global.set("admin_token", response.body.access_token);
+    });
+%}
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION U: SAVED POSTS API
+### ════════════════════════════════════════════════════════════════════
+
+### U1. Create Post to Save
+POST {{host}}/api/posts
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "communityId": {{community_id}},
+  "title": "Post for Saving",
+  "text": "This is a great post to save for later."
+}
+> {%
+    client.test("U1 — Create post for saving", function() {
+        client.global.set("save_post_id", response.body.id);
+    });
+%}
+
+### U2. Save Post
+POST {{host}}/api/posts/{{save_post_id}}/save
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("U2 — Save post", function() {
+        client.assert(response.status === 204, "Save failed: " + response.status);
+    });
+%}
+
+### U3. Guard: Double Save returns 400 Core BusinessException
+POST {{host}}/api/posts/{{save_post_id}}/save
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("U3 — Guard: Double save is 400", function() {
+         client.assert(response.status === 400, "Should be 400 BusinessException");
+    });
+%}
+
+### U4. Get Saved feed
+GET {{host}}/api/users/me/saved-posts
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("U4 — Fetch saved feed", function() {
+        client.assert(response.status === 200, "Fetch saved feed failed");
+        var found = response.body.content.some(function(p) {
+            return p.id == parseInt(client.global.get("save_post_id"));
+        });
+        client.assert(found, "Saved post missing from feed");
+    });
+%}
+
+### U5. Unsave post
+DELETE {{host}}/api/posts/{{save_post_id}}/save
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("U5 — Unsave post", function() {
+         client.assert(response.status === 204, "Unsave failed");
+    });
+%}
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION V: USER PROFILES
+### ════════════════════════════════════════════════════════════════════
+
+### V1. Get Public Profile (Lazy init - returns default values)
+GET {{host}}/api/users/testuser/profile
+
+> {%
+    client.test("V1 — Get public profile", function() {
+         client.assert(response.status === 200, "Get public profile failed");
+         client.assert(response.body.username === "testuser");
+    });
+%}
+
+### V2. Get Private Profile
+GET {{host}}/api/users/me/profile
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("V2 — Get private profile", function() {
+         client.assert(response.status === 200, "Get private profile failed");
+    });
+%}
+
+### V3. Update Profile (PATCH semantics)
+PUT {{host}}/api/users/me/profile
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+    "displayName": "Test Master",
+    "bio": "I am testing the reddit clone backend.",
+    "avatarUrl": "https://example.com/avatar.png"
+}
+
+> {%
+    client.test("V3 — Update profile", function() {
+        client.assert(response.status === 200, "Profile update failed");
+        client.assert(response.body.displayName === "Test Master");
+    });
+%}
+
+### V4. Ensure it saved properly
+GET {{host}}/api/users/testuser/profile
+
+> {%
+    client.test("V4 — Public profile is now updated", function() {
+         client.assert(response.status === 200);
+         client.assert(response.body.bio === "I am testing the reddit clone backend.");
+    });
+%}
+
+### V5. Negative Case — 404 for unknown user
+GET {{host}}/api/users/non_existent_user999/profile
+
+> {%
+    client.test("V5 — Guard: Unknown user profile is 404", function() {
+         client.assert(response.status === 404);
+    });
+%}
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION X: ADMIN MODERATION
+### ════════════════════════════════════════════════════════════════════
+
+### X1. Setup - create a ban target user
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "baduser123",
+  "email": "baduser@example.com",
+  "password": "Password123!"
+}
+> {%
+    client.test("X1 — Setup bad user", function() {
+        // Just checking 20x.
+    });
+%}
+
+### X2. Setup - login bad user to get their token
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "baduser@example.com",
+  "password": "Password123!"
+}
+> {%
+    client.test("X2 — Bad user logs in", function() {
+        client.global.set("bad_token", response.body.access_token);
+        // decode jwt to get user_id (not provided in login response natively, but we can hit /me/profile)
+    });
+%}
+
+### X3. Try ban WITHOUT Admin privileges — Guard 403
+PATCH {{host}}/api/admin/users/999/ban
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "reason": "Because I'm a fake admin"
+}
+> {%
+    client.test("X3 — Guard: Non-admin gets 403", function() {
+        client.assert(response.status === 403);
+    });
+%}
+
+### X4. Let bad user fetch profile to get their own ID
+GET {{host}}/api/users/me/profile
+Authorization: Bearer {{bad_token}}
+
+> {%
+    client.global.set("bad_user_id", response.body.userId);
+%}
+
+### X5. Real Admin bans the user
+PATCH {{host}}/api/admin/users/{{bad_user_id}}/ban
+Authorization: Bearer {{admin_token}}
+Content-Type: application/json
+
+{
+   "reason": "Violated terms of service repeatedly"
+}
+
+> {%
+    client.test("X5 — Admin successfully bans", function() {
+         client.assert(response.status === 204);
+    });
+%}
+
+### X6. Guard: Banned user login returns 401/403 automatically
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "baduser@example.com",
+  "password": "Password123!"
+}
+> {%
+    client.test("X6 — Guard: Banned user login blocked", function() {
+         client.assert(response.status === 401 || response.status === 403);
+    });
+%}
+
+### X7. Guard: Existing token filter chain blocks banned user
+GET {{host}}/api/users/me/profile
+Authorization: Bearer {{bad_token}}
+> {%
+    client.test("X7 — Guard: Existing token blocked in filter chain", function() {
+          client.assert(response.status === 401 || response.status === 403);
+    });
+%}
+
+### X8. Admin Override Moderation
+PATCH {{host}}/api/admin/posts/{{save_post_id}}/moderation
+Authorization: Bearer {{admin_token}}
+Content-Type: application/json
+
+{
+    "isModerated": true,
+    "displayText": "[REDACTED BY ADMIN]"
+}
+> {%
+    client.test("X8 — Admin override moderation", function() {
+         client.assert(response.status === 204);
+    });
+%}
+
+### ════════════════════════════════════════════════════════════════════
+###  SECTION Y: RECOMMENDATION FEED & COMMENT SORTING
+### ════════════════════════════════════════════════════════════════════
+### Test if PGVector cosine sim query is functioning natively
+
+### Y1. Fetch Recommended Feed
+GET {{host}}/api/posts/recommended?page=0&size=10
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Y1 — Recommended feed request succeeded", function() {
+         // Even without embeddings, it should fall back to newest (global) safely
+         client.assert(response.status === 200, "Recommended feed failed");
+         client.assert(response.body.content !== undefined);
+    });
+%}
+
+### Y2. Comment Sorting - sort=old
+GET {{host}}/api/posts/{{post_id}}/comments?sort=old
+Authorization: Bearer {{auth_token}}
+
+> {%
+    client.test("Y2 — Comments with sort=old", function() {
+         client.assert(response.status === 200, "Comment sort old failed");
+    });
+%}
+
+### Y3. Comment Sorting - sort=top
+GET {{host}}/api/posts/{{post_id}}/comments?sort=top
+
+> {%
+    client.test("Y3 — Comments with sort=top works unauthenticated", function() {
+         client.assert(response.status === 200, "Comment sort top failed");
+    });
+%}
