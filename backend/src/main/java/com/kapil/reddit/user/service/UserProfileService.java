@@ -58,7 +58,6 @@ public class UserProfileService {
 
         UserProfile profile = profileRepository.findByUserId(user.getId())
                 .orElseGet(() -> UserProfile.builder()
-                        .userId(user.getId())
                         .user(user)
                         .build());
 

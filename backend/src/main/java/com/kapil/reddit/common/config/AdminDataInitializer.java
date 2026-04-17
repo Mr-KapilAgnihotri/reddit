@@ -32,23 +32,31 @@ public class AdminDataInitializer {
 
         Role adminRole = adminRoleOpt.get();
 
-        boolean adminExists = userRepository.findAll()
+        Optional<User> existingAdmin = userRepository.findAll()
                 .stream()
-                .anyMatch(user ->
-                        user.getRoles().stream()
-                                .anyMatch(role -> role.getName().equals("ADMIN"))
-                );
+                .filter(user -> user.getRoles().stream()
+                        .anyMatch(role -> role.getName().equals("ADMIN")))
+                .findFirst();
 
-        if (adminExists) {
-            log.info("Admin user already exists. Skipping bootstrap.");
+        if (existingAdmin.isPresent()) {
+            User admin = existingAdmin.get();
+            // Ensure the admin can log in — set isVerified=true if not already set
+            if (!Boolean.TRUE.equals(admin.getIsVerified())) {
+                admin.setIsVerified(true);
+                userRepository.save(admin);
+                log.warn("Fixed existing admin user: set isVerified=true for email={}", admin.getEmail());
+            } else {
+                log.info("Admin user already exists. Skipping bootstrap.");
+            }
             return;
         }
 
         User admin = User.builder()
                 .username("admin")
-                .email("admin@reddit.com")
-                .passwordHash(passwordEncoder.encode("Admin@123"))
+                .email("admin@example.com")
+                .passwordHash(passwordEncoder.encode("Password123!"))
                 .isActive(true)
+                .isVerified(true)   // admin can log in immediately — no email verification step
                 .build();
 
         admin.getRoles().add(adminRole);
@@ -57,8 +65,8 @@ public class AdminDataInitializer {
 
         log.warn("🚀 Bootstrap ADMIN created!");
         log.warn("Username: admin");
-        log.warn("Email: admin@reddit.com");
-        log.warn("Password: Admin@123");
+        log.warn("Email: admin@example.com");
+        log.warn("Password: Password123!");
         log.warn("Please change this password immediately.");
     }
 }

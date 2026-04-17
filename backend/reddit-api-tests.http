@@ -1594,12 +1594,12 @@ Authorization: Bearer {{auth_token}}
 ### ════════════════════════════════════════════════════════════════════
 
 ### V1. Get Public Profile (Lazy init - returns default values)
-GET {{host}}/api/users/testuser/profile
+GET {{host}}/api/users/{{test_username}}/profile
 
 > {%
     client.test("V1 — Get public profile", function() {
-         client.assert(response.status === 200, "Get public profile failed");
-         client.assert(response.body.username === "testuser");
+         client.assert(response.status === 200, "Get public profile failed: " + response.status + " — " + JSON.stringify(response.body));
+         client.assert(response.body.username === client.global.get("test_username"), "Username mismatch");
     });
 %}
 
@@ -1632,12 +1632,12 @@ Content-Type: application/json
 %}
 
 ### V4. Ensure it saved properly
-GET {{host}}/api/users/testuser/profile
+GET {{host}}/api/users/{{test_username}}/profile
 
 > {%
     client.test("V4 — Public profile is now updated", function() {
-         client.assert(response.status === 200);
-         client.assert(response.body.bio === "I am testing the reddit clone backend.");
+         client.assert(response.status === 200, "Get public profile after update failed: " + response.status);
+         client.assert(response.body.bio === "I am testing the reddit clone backend.", "Bio not updated, got: " + response.body.bio);
     });
 %}
 
@@ -1654,18 +1654,30 @@ GET {{host}}/api/users/non_existent_user999/profile
 ###  SECTION X: ADMIN MODERATION
 ### ════════════════════════════════════════════════════════════════════
 
-### X1. Setup - create a ban target user
-POST {{host}}/api/auth/register
+### X1. Setup - create a ban target user (using the real registration endpoint)
+POST {{host}}/api/users
 Content-Type: application/json
 
 {
-  "username": "baduser123",
-  "email": "baduser@example.com",
+  "username": "baduser_{{$timestamp}}",
+  "email": "baduser_{{$timestamp}}@example.com",
   "password": "Password123!"
 }
 > {%
-    client.test("X1 — Setup bad user", function() {
-        // Just checking 20x.
+    client.test("X1 — Setup bad user (registered)", function() {
+        client.assert(response.status === 200, "Bad user registration FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.verificationToken != null, "No verificationToken — set app.auth.expose-verification-token-on-register=true");
+    });
+    client.global.set("bad_user_email", response.body.email);
+    client.global.set("bad_user_verification_token", response.body.verificationToken);
+%}
+
+### X1b. Auto-verify bad user email (needed before login is possible)
+GET {{host}}/api/auth/verify?token={{bad_user_verification_token}}
+
+> {%
+    client.test("X1b — Verify bad user email", function() {
+        client.assert(response.status === 200, "Verify bad user FAILED: " + response.status + " — " + JSON.stringify(response.body));
     });
 %}
 
@@ -1674,13 +1686,13 @@ POST {{host}}/api/auth/login
 Content-Type: application/json
 
 {
-  "email": "baduser@example.com",
+  "email": "{{bad_user_email}}",
   "password": "Password123!"
 }
 > {%
     client.test("X2 — Bad user logs in", function() {
+        client.assert(response.status === 200, "Bad user login FAILED: " + response.status + " — " + JSON.stringify(response.body));
         client.global.set("bad_token", response.body.access_token);
-        // decode jwt to get user_id (not provided in login response natively, but we can hit /me/profile)
     });
 %}
 
@@ -1703,6 +1715,10 @@ GET {{host}}/api/users/me/profile
 Authorization: Bearer {{bad_token}}
 
 > {%
+    client.test("X4 — Bad user fetches own profile", function() {
+        client.assert(response.status === 200, "Bad user profile fetch FAILED: " + response.status + " — " + JSON.stringify(response.body));
+        client.assert(response.body.userId != null, "userId missing from profile response");
+    });
     client.global.set("bad_user_id", response.body.userId);
 %}
 
@@ -1726,12 +1742,13 @@ POST {{host}}/api/auth/login
 Content-Type: application/json
 
 {
-  "email": "baduser@example.com",
+  "email": "{{bad_user_email}}",
   "password": "Password123!"
 }
 > {%
     client.test("X6 — Guard: Banned user login blocked", function() {
-         client.assert(response.status === 401 || response.status === 403);
+         client.assert(response.status === 400 || response.status === 401 || response.status === 403,
+             "Expected banned user login to fail, got: " + response.status);
     });
 %}
 

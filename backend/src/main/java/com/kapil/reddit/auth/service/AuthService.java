@@ -37,6 +37,10 @@ public class AuthService {
             throw new BusinessException("Email not verified");
         }
 
+        if (!Boolean.TRUE.equals(user.getIsActive())) {
+            throw new BusinessException("Account is banned");
+        }
+
         String accessToken = jwtService.generateAccessToken(
                 user.getEmail(),
                 user.getRoles()

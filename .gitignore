@@ -1,0 +1,7 @@
+whatwehavedoneandhow.txt
+interview-prep.txt
+ml-service/venv/
+venv/
+*.pyc
+__pycache__/
+howtorun.txt
