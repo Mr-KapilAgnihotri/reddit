@@ -75,9 +75,20 @@ creating the tables, inserting default roles (USER, ADMIN), and configuring pgve
 The server will start on port 8080. Keep this terminal open.
 
 ---------------------------------------------------------
-5. VERIFICATION / HOW TO TEST
+5. STARTING THE FRONTEND (React + Vite)
 ---------------------------------------------------------
-We have provided a comprehensive `reddit-api-tests.http` file inside the `backend` folder.
+1. Open a new terminal session in the `frontend` directory.
+   > cd frontend
+2. Install the javascript dependencies (only needed once):
+   > npm install
+3. Run the Vite development server:
+   > npm run dev
+
+The React application will usually start on `http://localhost:5173`. 
+The frontend automatically proxies `/api` calls to your Spring Boot backend on 8080!
+
+---------------------------------------------------------
+6. VERIFICATION / HOW TO TEST
 
 1. Open `reddit-api-tests.http` inside IntelliJ IDEA.
 2. Run Section A1 (Register) and A2 (Login). The script will automatically store your `auth_token` 

@@ -72,22 +72,6 @@ Content-Type: application/json
     client.global.set("verification_token", response.body.verificationToken);
 %}
 
-### A1b. Login BEFORE email verification — MUST fail (400)
-POST {{host}}/api/auth/login
-Content-Type: application/json
-
-{
-  "email": "{{test_email}}",
-  "password": "{{test_password}}"
-}
-
-> {%
-    client.test("A1b — Login blocked until email verified", function() {
-        client.assert(response.status === 400, "Expected 400 before verify, got " + response.status);
-        client.assert(response.body && response.body.message && response.body.message.indexOf("Email not verified") >= 0, "Expected Email not verified message");
-    });
-%}
-
 ### A1c. Verify email (GET — same as link in email; token from A1)
 GET {{host}}/api/auth/verify?token={{verification_token}}
 

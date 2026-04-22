@@ -33,10 +33,6 @@ public class AuthService {
             throw new BusinessException("Invalid email or password");
         }
 
-        if (!Boolean.TRUE.equals(user.getIsVerified())) {
-            throw new BusinessException("Email not verified");
-        }
-
         if (!Boolean.TRUE.equals(user.getIsActive())) {
             throw new BusinessException("Account is banned");
         }
