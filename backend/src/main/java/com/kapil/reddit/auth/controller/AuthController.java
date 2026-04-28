@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
@@ -69,7 +70,7 @@ public class AuthController {
     @GetMapping("/verify")
     public ResponseEntity<Map<String, String>> verifyEmailGet(@RequestParam String token) {
         emailVerificationService.verifyEmail(token.trim());
-        return ResponseEntity.ok(Map.of("message", "Email verified"));
+        return ResponseEntity.ok(Map.of("message", "Email verified successfully"));
     }
 
     @PostMapping("/verify")
@@ -77,19 +78,39 @@ public class AuthController {
             @RequestParam(required = false) String token,
             @RequestBody(required = false) VerifyEmailRequest body) {
         emailVerificationService.verifyEmail(resolveVerificationToken(token, body));
-        return ResponseEntity.ok(Map.of("message", "Email verified"));
+        return ResponseEntity.ok(Map.of("message", "Email verified successfully"));
     }
 
+    /**
+     * Initiates a password reset for the given email address.
+     *
+     * <p>Always returns HTTP 200 regardless of whether the email is registered —
+     * this prevents user-enumeration attacks.
+     *
+     * <p>When {@code app.auth.expose-reset-token-on-forgot-password=true} (test/dev
+     * only) the raw token is returned in the JSON response body so that API clients
+     * can drive the full reset flow without reading the email or the database.
+     */
     @PostMapping("/forgot-password")
-    public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        passwordResetService.forgotPassword(request.getEmail());
-        return ResponseEntity.ok().build();
+    public ResponseEntity<Map<String, Object>> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request) {
+
+        String rawToken = passwordResetService.forgotPassword(request.getEmail());
+
+        // Build response — always 200, token included only when expose flag is on
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("message", "If that email is registered you will receive a reset link shortly.");
+        if (rawToken != null) {
+            body.put("resetToken", rawToken);
+        }
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+    public ResponseEntity<Map<String, String>> resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request) {
         passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(Map.of("message", "Password reset successfully. Please log in with your new password."));
     }
 
     private static String resolveVerificationToken(String queryToken, VerifyEmailRequest body) {

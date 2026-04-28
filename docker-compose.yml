@@ -132,6 +132,7 @@ services:
       # App settings
       APP_BASE_URL: http://localhost:8080
       APP_AUTH_EXPOSE_VERIFICATION_TOKEN_ON_REGISTER: "true"
+      APP_AUTH_EXPOSE_RESET_TOKEN_ON_FORGOT_PASSWORD: "true"
 
     depends_on:
       postgres:

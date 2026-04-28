@@ -32,8 +32,27 @@ public class PasswordResetService {
     @Value("${app.base-url}")
     private String appBaseUrl;
 
+    /**
+     * When true, the raw reset token is returned from {@link #forgotPassword(String)}
+     * so API test clients can drive the reset flow without reading email or the DB.
+     * Set to false in production.
+     */
+    @Value("${app.auth.expose-reset-token-on-forgot-password:false}")
+    private boolean exposeResetToken;
+
+    /**
+     * Initiates a password reset for the given email.
+     *
+     * <p>Always returns 200 regardless of whether the email is known — this prevents
+     * user-enumeration attacks. When {@code exposeResetToken} is true the raw token
+     * is returned in the response; otherwise {@code null} is returned.
+     *
+     * @return the raw reset token when {@code exposeResetToken=true}, otherwise {@code null}
+     */
     @Transactional
-    public void forgotPassword(String email) {
+    public String forgotPassword(String email) {
+        final String[] tokenHolder = {null};
+
         userRepository.findByEmail(email).ifPresent(user -> {
             passwordResetTokenRepository.deleteByUser_Id(user.getId());
 
@@ -56,7 +75,13 @@ public class PasswordResetService {
             } catch (Exception e) {
                 log.warn("Failed to send password reset email to user id {}: {}", user.getId(), e.getMessage());
             }
+
+            if (exposeResetToken) {
+                tokenHolder[0] = rawToken;
+            }
         });
+
+        return tokenHolder[0];
     }
 
     @Transactional

@@ -99,10 +99,7 @@ public class AuthService {
                 refreshTokenRepository.findAllByUser(user);
 
         for (RefreshToken token : tokens) {
-            if (token.isRevoked()) {
-                throw new BusinessException("Token already revoked");
-            }
-            token.setRevoked(true);
+            token.setRevoked(true); // idempotent — safe to re-revoke already-revoked tokens
         }
 
         refreshTokenRepository.saveAll(tokens);
