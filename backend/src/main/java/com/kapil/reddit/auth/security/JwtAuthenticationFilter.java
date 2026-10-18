@@ -42,22 +42,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String email = jwtService.extractEmail(token);
-       /* List<String> roles = jwtService.extractRoles(token);
-
-        List<SimpleGrantedAuthority> authorities =
-                roles.stream()
-                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
-                        .toList();
-        */
-
+        // BUG FIX: only permissions were granted, so hasRole('ADMIN') / hasRole('USER')
+        // (which need ROLE_ADMIN / ROLE_USER authorities) always failed with 403.
+        // Grant both: ROLE_<role> for every role plus every fine-grained permission.
+        List<String> roles = jwtService.extractRoles(token);
         List<String> permissions = jwtService.extractPermissions(token);
 
-        List<SimpleGrantedAuthority> authorities =
-                permissions == null ? List.of() :
-                permissions.stream()
-                        .map(SimpleGrantedAuthority::new)
-                        .toList();
-
+        List<SimpleGrantedAuthority> authorities = new java.util.ArrayList<>();
+        if (roles != null) {
+            roles.forEach(role -> authorities.add(new SimpleGrantedAuthority("ROLE_" + role)));
+        }
+        if (permissions != null) {
+            permissions.forEach(p -> authorities.add(new SimpleGrantedAuthority(p)));
+        }
 
         UsernamePasswordAuthenticationToken authToken =
                 new UsernamePasswordAuthenticationToken(

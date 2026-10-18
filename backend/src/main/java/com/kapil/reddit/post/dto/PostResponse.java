@@ -35,4 +35,10 @@ public class PostResponse {
     private List<PostMediaResponse> media;
 
     private Short userVote;
+
+    /** True when the ML pipeline flagged and masked this post. */
+    private Boolean moderated;
+
+    /** True when the requesting user may delete it (author, community owner/mod, admin). */
+    private Boolean canDelete;
 }

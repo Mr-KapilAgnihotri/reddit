@@ -68,4 +68,18 @@ public class GlobalExceptionHandler {
                 .path(request.getRequestURI())
                 .build();
     }
+
+    /** Image upload over spring.servlet.multipart.max-file-size (otherwise a bare 500). */
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public ApiError handleMaxUploadSize(org.springframework.web.multipart.MaxUploadSizeExceededException ex,
+                                        HttpServletRequest request) {
+        return ApiError.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.PAYLOAD_TOO_LARGE.value())
+                .error("Payload Too Large")
+                .message("Image is larger than 5 MB")
+                .path(request.getRequestURI())
+                .build();
+    }
 }

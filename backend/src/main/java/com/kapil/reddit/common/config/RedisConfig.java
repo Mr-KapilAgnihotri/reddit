@@ -244,6 +244,11 @@ public class RedisConfig {
     public RedisCacheManagerBuilderCustomizer redisCacheManagerBuilderCustomizer() {
         RedisCacheConfiguration base = defaultRedisCacheConfiguration();
         return builder -> builder
+                // Defer puts/evictions until the surrounding transaction commits. Otherwise
+                // @CacheEvict on a @Transactional method (e.g. handleModerationResult) could run
+                // before commit, and a concurrent GET would re-cache the pre-moderation post
+                // for the full TTL — the UI would keep showing unmasked text.
+                .transactionAware()
                 .withCacheConfiguration("globalFeed", base.entryTtl(GLOBAL_FEED_TTL))
                 .withCacheConfiguration("homeFeed",   base.entryTtl(HOME_FEED_TTL))
                 .withCacheConfiguration("postDetail", base.entryTtl(POST_DETAIL_TTL))

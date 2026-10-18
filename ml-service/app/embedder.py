@@ -1,56 +1,57 @@
 """
-Embedding module — generates 384-dimensional text embeddings using the
-all-MiniLM-L6-v2 SentenceTransformer model.
+Lightweight text embeddings — no model download, no GPU, no torch.
 
-Model facts:
-  • 22M parameters — lightweight, runs on CPU in ~50ms per post.
-  • Output dimension: 384.
-  • Pre-trained on 1B+ sentence pairs — excellent semantic similarity.
-  • No GPU required. Fits comfortably inside a Docker container.
-
-The model is loaded once at module import time (lazy singleton) so the
-expensive initialisation only happens on the first call.
+Uses the *hashing trick*: every word unigram and bigram is hashed (stable MD5,
+not Python's salted ``hash``) into one of 384 buckets with a +/- sign, the
+counts are TF-weighted and the vector is L2-normalised. Posts that share
+vocabulary end up close in cosine space, which is what the pgvector
+recommendation feed needs. The dimension matches ``posts.embedding vector(384)``.
 """
+from __future__ import annotations
 
-import logging
-from functools import lru_cache
+import hashlib
+import math
+import re
 from typing import List
 
-logger = logging.getLogger(__name__)
+from app.config import EMBEDDING_DIM
 
-_model = None
+_TOKEN_RE = re.compile(r"[a-z0-9']+")
+_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "at", "for",
+    "with", "is", "are", "was", "were", "be", "been", "it", "this", "that", "i", "you",
+    "he", "she", "we", "they", "my", "your", "so", "as", "by", "from", "do", "does",
+}
 
 
-def _get_model():
-    """Lazy-load the SentenceTransformer model (thread-safe via GIL on first load)."""
-    global _model
-    if _model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            logger.info("Loading SentenceTransformer model: all-MiniLM-L6-v2 ...")
-            _model = SentenceTransformer("all-MiniLM-L6-v2")
-            logger.info("✅ SentenceTransformer model loaded (dim=384)")
-        except Exception as exc:
-            logger.error("❌ Failed to load SentenceTransformer: %s", exc)
-            raise
-    return _model
+def _tokens(text: str) -> List[str]:
+    words = [w for w in _TOKEN_RE.findall(text.lower()) if w not in _STOPWORDS]
+    bigrams = [f"{a}_{b}" for a, b in zip(words, words[1:])]
+    return words + bigrams
+
+
+def _bucket(token: str) -> tuple[int, float]:
+    digest = hashlib.md5(token.encode("utf-8")).digest()
+    index = int.from_bytes(digest[:4], "little") % EMBEDDING_DIM
+    sign = 1.0 if digest[4] & 1 else -1.0
+    return index, sign
 
 
 def generate_embedding(text: str) -> List[float]:
-    """
-    Generate a 384-dimensional embedding for the given text.
-
-    Args:
-        text: The post body text to embed.
-
-    Returns:
-        A list of 384 floats representing the text embedding.
-    """
+    """Return a 384-dim, L2-normalised embedding (all zeros for empty text)."""
+    vec = [0.0] * EMBEDDING_DIM
     if not text or not text.strip():
-        # Return a zero vector for empty text — avoids errors in the pipeline
-        logger.warning("generate_embedding called with empty text — returning zero vector")
-        return [0.0] * 384
+        return vec
 
-    model = _get_model()
-    embedding = model.encode(text, normalize_embeddings=True)
-    return embedding.tolist()
+    counts: dict[str, int] = {}
+    for tok in _tokens(text):
+        counts[tok] = counts.get(tok, 0) + 1
+
+    for tok, n in counts.items():
+        idx, sign = _bucket(tok)
+        vec[idx] += sign * (1.0 + math.log(n))
+
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm == 0:
+        return vec
+    return [v / norm for v in vec]

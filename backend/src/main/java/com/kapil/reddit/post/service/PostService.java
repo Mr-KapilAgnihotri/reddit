@@ -10,6 +10,8 @@ import com.kapil.reddit.post.domain.PostMedia;
 import com.kapil.reddit.post.dto.CreatePostRequest;
 import com.kapil.reddit.post.dto.MediaRequest;
 import com.kapil.reddit.post.dto.PostResponse;
+import com.kapil.reddit.post.dto.MediaRequest;
+import com.kapil.reddit.common.security.ContentAccess;
 import com.kapil.reddit.post.dto.UpdatePostRequest;
 import com.kapil.reddit.post.event.ModerationResultEvent;
 import com.kapil.reddit.post.event.PostProducer;
@@ -49,6 +51,27 @@ public class PostService {
     private final PostVoteRepository postVoteRepository;
     private final PostProducer postProducer;
     private final SavedPostRepository savedPostRepository;
+    private final ContentAccess contentAccess;
+
+    /**
+     * Moderation is asynchronous (Kafka → ML → Kafka) and usually lands within a second or two
+     * of creation. A read racing that commit can put the unmasked post into Redis right after
+     * the consumer's eviction, where it would stay for the full TTL — the UI polls brand-new
+     * posts for the "moderated" badge and kept seeing stale text. So responses that contain a
+     * post younger than this window are served from the DB and not cached.
+     */
+    public static final java.time.Duration MODERATION_WINDOW = java.time.Duration.ofSeconds(60);
+
+    /** SpEL helper for {@code @Cacheable(unless = ...)}: true while a post may still be moderated. */
+    public static boolean isUnsettled(PostResponse post) {
+        return post == null || post.getCreatedAt() == null
+                || post.getCreatedAt().isAfter(Instant.now().minus(MODERATION_WINDOW));
+    }
+
+    /** SpEL helper: true when any post on the page may still be moderated. */
+    public static boolean hasUnsettled(Page<PostResponse> page) {
+        return page != null && page.getContent().stream().anyMatch(PostService::isUnsettled);
+    }
 
     private Sort resolveSort(String sort) {
         if ("top".equalsIgnoreCase(sort)) {
@@ -59,12 +82,6 @@ public class PostService {
         return Sort.by(Sort.Direction.DESC, "createdAt"); // Default is new
     }
 
-    private Long getUserIdOrNull(String email) {
-        if (email == null)
-            return null;
-        return userRepository.findByEmail(email).map(User::getId).orElse(null);
-    }
-
     private Short getUserVote(Long postId, Long userId) {
         if (userId == null)
             return 0;
@@ -73,11 +90,34 @@ public class PostService {
                 .orElse((short) 0);
     }
 
-    private Page<PostResponse> mapPosts(Page<Post> posts, Long userId) {
-        return posts.map(post -> {
-            Short userVote = getUserVote(post.getId(), userId);
-            return PostMapper.toResponse(post, post.getMedia(), userVote);
-        });
+    private PostResponse toResponse(Post post, ContentAccess.Viewer viewer) {
+        return PostMapper.toResponse(post, post.getMedia(), getUserVote(post.getId(), viewer.userId()),
+                viewer.canRemove(post.getAuthor().getId(),
+                        post.getCommunity() != null ? post.getCommunity().getId() : null));
+    }
+
+    private Page<PostResponse> mapPosts(Page<Post> posts, ContentAccess.Viewer viewer) {
+        return posts.map(post -> toResponse(post, viewer));
+    }
+
+    private static final int MAX_MEDIA_PER_POST = 10;
+
+    /**
+     * Media URLs end up in {@code <img src>} on every viewer's screen, so only accept our own
+     * uploads ({@code /media/...}) or plain http(s) links, never {@code javascript:} / {@code data:}.
+     */
+    private static void validateMedia(List<MediaRequest> media) {
+        if (media == null) return;
+        if (media.size() > MAX_MEDIA_PER_POST) {
+            throw new BusinessException("A post can have at most " + MAX_MEDIA_PER_POST + " images");
+        }
+        for (MediaRequest m : media) {
+            String url = m.getMediaUrl() == null ? "" : m.getMediaUrl().trim();
+            boolean ok = url.startsWith("/media/") || url.startsWith("https://") || url.startsWith("http://");
+            if (!ok || url.length() > 2000) {
+                throw new BusinessException("Invalid media URL");
+            }
+        }
     }
 
     // ================= CREATE POST =================
@@ -86,6 +126,7 @@ public class PostService {
             @CacheEvict(value = "globalFeed", allEntries = true),
             @CacheEvict(value = "homeFeed",   allEntries = true)
     })
+    @Transactional
     public PostResponse createPost(String email, CreatePostRequest request) {
 
         User author = userRepository.findByEmail(email)
@@ -125,6 +166,8 @@ public class PostService {
                 .updatedAt(Instant.now())
                 .build();
 
+        validateMedia(request.getMedia());
+
         Post saved = postRepository.save(post);
 
         // Save media
@@ -133,8 +176,8 @@ public class PostService {
             List<PostMedia> mediaList = request.getMedia().stream()
                     .map(mediaRequest -> PostMedia.builder()
                             .post(saved)
-                            .mediaUrl(mediaRequest.getMediaUrl())
-                            .mediaType(mediaRequest.getMediaType())
+                            .mediaUrl(mediaRequest.getMediaUrl().trim())
+                            .mediaType(mediaRequest.getMediaType() != null ? mediaRequest.getMediaType() : "IMAGE")
                             .caption(mediaRequest.getCaption())
                             .createdAt(Instant.now())
                             .build())
@@ -145,9 +188,28 @@ public class PostService {
             // IMPORTANT: attach media to post object
             saved.setMedia(mediaList);
         }
-        postProducer.sendPostCreatedEvent(saved);
+        publishAfterCommit(saved);
 
-        return PostMapper.toResponse(saved, saved.getMedia(), (short) 0);
+        return PostMapper.toResponse(saved, saved.getMedia(), (short) 0, true); // author can always delete
+    }
+
+    /**
+     * BUG FIX: the Kafka event used to be sent while the post was still being written.
+     * The ML service could answer before the row was committed. When a transaction is
+     * active we now publish only after it commits; otherwise (unit tests) immediately.
+     */
+    private void publishAfterCommit(Post saved) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            postProducer.sendPostCreatedEvent(saved);
+                        }
+                    });
+        } else {
+            postProducer.sendPostCreatedEvent(saved);
+        }
     }
 
     // ================= GLOBAL FEED =================
@@ -159,13 +221,13 @@ public class PostService {
     @Transactional(readOnly = true)
     @Cacheable(
             value = "globalFeed",
-            key   = "(#email != null ? #email.toLowerCase().trim() : 'anon') + '-' + #page + '-' + #size + '-' + #sort"
+            key   = "(#email != null ? #email.toLowerCase().trim() : 'anon') + '-' + #page + '-' + #size + '-' + #sort",
+            unless = "T(com.kapil.reddit.post.service.PostService).hasUnsettled(#result)"
     )
     public Page<PostResponse> getGlobalPosts(String email, int page, int size, String sort) {
-        Long userId = getUserIdOrNull(email);
         Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
         Page<Post> posts = postRepository.findByIsDeletedFalse(pageable);
-        return mapPosts(posts, userId);
+        return mapPosts(posts, contentAccess.viewer(email));
     }
 
     // ================= HOME FEED =================
@@ -178,7 +240,8 @@ public class PostService {
     @Transactional(readOnly = true)
     @Cacheable(
             value = "homeFeed",
-            key   = "#email.toLowerCase().trim() + '-' + #page + '-' + #size + '-' + #sort"
+            key   = "#email.toLowerCase().trim() + '-' + #page + '-' + #size + '-' + #sort",
+            unless = "T(com.kapil.reddit.post.service.PostService).hasUnsettled(#result)"
     )
     public Page<PostResponse> getHomeFeed(String email, int page, int size, String sort) {
         User user = userRepository.findByEmail(email)
@@ -190,27 +253,28 @@ public class PostService {
                 .map(member -> member.getCommunity().getId())
                 .toList();
 
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
+
         if (communityIds.isEmpty()) {
-            return Page.empty();
+            // Not Page.empty(): its Unpaged pageable throws on getOffset() when the result is
+            // serialized into the Redis cache → 500 for every user who hasn't joined anything.
+            return new org.springframework.data.domain.PageImpl<>(List.of(), pageable, 0);
         }
 
-        Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
         Page<Post> posts = postRepository.findByCommunityIdInAndIsDeletedFalse(communityIds, pageable);
-        return mapPosts(posts, user.getId());
+        return mapPosts(posts, contentAccess.viewer(user));
     }
 
     // ================= USER POSTS =================
 
     @Transactional(readOnly = true)
     public Page<PostResponse> getUserPosts(String requestingEmail, String username, int page, int size, String sort) {
-        Long requestingUserId = getUserIdOrNull(requestingEmail);
-
         User targetUser = userRepository.findByUsername(username)
                 .orElseThrow(() -> new BusinessException("User not found"));
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
         Page<Post> posts = postRepository.findByAuthorIdAndIsDeletedFalse(targetUser.getId(), pageable);
-        return mapPosts(posts, requestingUserId);
+        return mapPosts(posts, contentAccess.viewer(requestingEmail));
     }
 
     // ================= COMMUNITY POSTS =================
@@ -218,20 +282,19 @@ public class PostService {
     @Transactional(readOnly = true)
     public Page<PostResponse> getCommunityPosts(String requestingEmail, String communityName, int page, int size,
             String sort) {
-        Long requestingUserId = getUserIdOrNull(requestingEmail);
-
         Community community = communityRepository.findByNameAndIsDeletedFalse(communityName)
                 .orElseThrow(() -> new BusinessException("Community not found"));
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sort));
         Page<Post> posts = postRepository.findByCommunityIdAndIsDeletedFalse(community.getId(), pageable);
-        return mapPosts(posts, requestingUserId);
+        return mapPosts(posts, contentAccess.viewer(requestingEmail));
     }
 
     // ================= GET SINGLE POST =================
 
     @Transactional
-    @Cacheable(value = "postDetail", key = "#id + '-' + (#email != null ? #email.toLowerCase().trim() : 'anon')")
+    @Cacheable(value = "postDetail", key = "#id + '-' + (#email != null ? #email.toLowerCase().trim() : 'anon')",
+            unless = "T(com.kapil.reddit.post.service.PostService).isUnsettled(#result)")
     public PostResponse getPost(Long id, String email) {
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Post not found"));
@@ -240,13 +303,12 @@ public class PostService {
             throw new ResourceNotFoundException("Post not found");
         }
 
-        post.setViewCount(post.getViewCount() + 1);
-        postRepository.save(post);
+        // BUG FIX: this used to be post.setViewCount(+1) + save(post). Hibernate then rewrote
+        // every column, so a GET racing the moderation consumer flushed the stale
+        // display_text / is_moderated=false back over the freshly moderated row.
+        postRepository.incrementViewCount(id);
 
-        Long userId = getUserIdOrNull(email);
-        Short userVote = getUserVote(id, userId);
-
-        return PostMapper.toResponse(post, post.getMedia(), userVote);
+        return toResponse(post, contentAccess.viewer(email));
     }
 
     // ================= UPDATE POST =================
@@ -278,9 +340,8 @@ public class PostService {
         post.setUpdatedAt(Instant.now());
 
         postRepository.save(post);
-        Short userVote = getUserVote(id, user.getId());
 
-        return PostMapper.toResponse(post, post.getMedia(), userVote);
+        return toResponse(post, contentAccess.viewer(user));
     }
 
     // ================= DELETE POST =================
@@ -290,6 +351,7 @@ public class PostService {
             @CacheEvict(value = "globalFeed", allEntries = true),
             @CacheEvict(value = "homeFeed",   allEntries = true)
     })
+    @Transactional
     public void deletePost(Long id, String email) {
 
         Post post = postRepository.findById(id)
@@ -298,11 +360,13 @@ public class PostService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException("User not found"));
 
-        if (!post.getAuthor().getId().equals(user.getId())) {
-            throw new BusinessException("Only author can delete post");
+        Long communityId = post.getCommunity() != null ? post.getCommunity().getId() : null;
+        if (!contentAccess.viewer(user).canRemove(post.getAuthor().getId(), communityId)) {
+            throw new BusinessException("Only the author, a community moderator or an admin can delete this post");
         }
 
         post.setIsDeleted(true);
+        post.setUpdatedAt(Instant.now());
         postRepository.save(post);
     }
 
@@ -338,6 +402,9 @@ public class PostService {
                     String maskedText = event.getMaskedText();
                     if (maskedText != null) {
                         post.setDisplayText(maskedText);
+                    }
+                    if (event.getMaskedTitle() != null && !event.getMaskedTitle().isBlank()) {
+                        post.setTitle(event.getMaskedTitle());
                     }
                     post.setIsModerated(event.isModerated());
                     post.setUpdatedAt(Instant.now());
@@ -400,6 +467,7 @@ public class PostService {
                 .orElseThrow(() -> new BusinessException("User not found"));
 
         Long userId = user.getId();
+        ContentAccess.Viewer viewer = contentAccess.viewer(user);
 
         // 1. Collect positive-signal post IDs (upvoted + saved)
         java.util.List<Long> upvotedIds = postRepository.findUpvotedPostIdsByUserId(userId);
@@ -430,7 +498,7 @@ public class PostService {
             log.info("RecommendedFeed: no reference embeddings for user {} → fallback to global", email);
             org.springframework.data.domain.Pageable pageable = PageRequest.of(page, size,
                     Sort.by(Sort.Direction.DESC, "createdAt"));
-            return mapPosts(postRepository.findByIsDeletedFalse(pageable), userId);
+            return mapPosts(postRepository.findByIsDeletedFalse(pageable), viewer);
         }
 
         // 5. Serialise as pgvector literal: "[f1,f2,...,f384]"
@@ -463,7 +531,7 @@ public class PostService {
                 : similar.subList(start, end);
 
         java.util.List<PostResponse> responses = pageContent.stream()
-                .map(p -> PostMapper.toResponse(p, p.getMedia(), getUserVote(p.getId(), userId)))
+                .map(p -> toResponse(p, viewer))
                 .toList();
 
         return new org.springframework.data.domain.PageImpl<>(

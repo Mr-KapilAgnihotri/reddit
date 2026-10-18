@@ -253,6 +253,29 @@ class AuthEmailVerificationAndPasswordResetIT extends AbstractIntegrationTest {
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
+    @Test
+    void verifyEmail_postWithQueryTokenAndNoJsonBody_succeeds() {
+        // Like `Invoke-RestMethod -Method Post ".../verify?token=..."` or `curl -X POST`:
+        // form/no content type and no body. Used to fail with 415.
+        String email = "q-" + UUID.randomUUID() + "@test.com";
+        Long userId = registerUser(email, "Password12!");
+        String token = emailVerificationTokenRepository.findTopByUser_IdOrderByIdDesc(userId)
+                .orElseThrow().getToken();
+
+        HttpHeaders form = new HttpHeaders();
+        form.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        ResponseEntity<String> res = restTemplate.postForEntity(
+                baseUrl() + "/api/auth/verify?token=" + token, new HttpEntity<>(null, form), String.class);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> login = restTemplate.postForEntity(
+                baseUrl() + "/api/auth/login",
+                new HttpEntity<>(Map.of("email", email, "password", "Password12!"), jsonHeaders()),
+                String.class
+        );
+        assertThat(login.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
     private Long registerUser(String email, String password) {
         ResponseEntity<UserResponse> reg = restTemplate.postForEntity(
                 baseUrl() + "/api/users",

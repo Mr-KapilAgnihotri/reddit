@@ -8,11 +8,15 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 
 @Component
+// Roles are seeded by RoleDataInitializer's @PostConstruct; without this, on a fresh
+// database this bean could run first, find no ADMIN role and skip the admin bootstrap.
+@DependsOn("roleDataInitializer")
 @RequiredArgsConstructor
 @Slf4j
 public class AdminDataInitializer {

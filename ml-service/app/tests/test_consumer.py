@@ -98,7 +98,8 @@ class TestConsumerLoop:
 
         with patch("app.consumer.KafkaConsumer", return_value=mock_consumer_instance), \
              patch("app.consumer.process_text") as mock_process, \
-             patch("app.consumer.send_result") as mock_send:
+             patch("app.consumer.send_result") as mock_send, \
+             patch("app.consumer.send_embedding"):
 
             mock_process.side_effect = lambda d: {
                 "postId": d.get("postId"),
@@ -108,7 +109,7 @@ class TestConsumerLoop:
             }
 
             from app.consumer import start_consumer
-            start_consumer()
+            start_consumer(run_forever=False)
 
         return mock_process, mock_send
 
@@ -143,9 +144,10 @@ class TestConsumerLoop:
 
         with patch("app.consumer.KafkaConsumer", return_value=mock_consumer_instance), \
              patch("app.consumer.process_text", side_effect=[RuntimeError("boom"), {"postId": 2, "maskedText": "good", "isModerated": False}]) as mock_process, \
-             patch("app.consumer.send_result") as mock_send:
+             patch("app.consumer.send_result") as mock_send, \
+             patch("app.consumer.send_embedding"):
             from app.consumer import start_consumer
-            start_consumer()  # must not raise
+            start_consumer(run_forever=False)  # must not raise
 
         assert mock_process.call_count == 2
         # send_result called only for the second (successful) message
@@ -166,4 +168,36 @@ class TestConsumerLoop:
         with patch("app.consumer.KafkaConsumer", side_effect=Exception("connection refused")), \
              patch("app.consumer.time.sleep"):  # skip actual sleeping
             from app.consumer import start_consumer
-            start_consumer()   # must return cleanly, not raise
+            start_consumer(run_forever=False)   # must return cleanly, not raise
+
+
+# ── handle_message: embedding publishing ──────────────────────────────────────
+
+class TestHandleMessage:
+    def test_embedding_published_with_384_dims(self):
+        with patch("app.consumer.send_result") as mock_send, \
+             patch("app.consumer.send_embedding") as mock_emb:
+            from app.consumer import handle_message
+            assert handle_message({"postId": 7, "title": "Kafka", "text": "spring boot and kafka"}) is True
+
+        mock_send.assert_called_once()
+        payload = mock_emb.call_args[0][0]
+        assert payload["postId"] == 7
+        assert len(payload["embedding"]) == 384
+
+    def test_embedding_failure_does_not_block_moderation(self):
+        with patch("app.consumer.send_result") as mock_send, \
+             patch("app.consumer.generate_embedding", side_effect=RuntimeError("boom")), \
+             patch("app.consumer.send_embedding") as mock_emb:
+            from app.consumer import handle_message
+            assert handle_message({"postId": 8, "text": "hello"}) is True
+
+        mock_send.assert_called_once()
+        mock_emb.assert_not_called()
+
+    def test_empty_text_sends_no_zero_embedding(self):
+        with patch("app.consumer.send_result"), \
+             patch("app.consumer.send_embedding") as mock_emb:
+            from app.consumer import handle_message
+            handle_message({"postId": 9, "text": ""})
+        mock_emb.assert_not_called()

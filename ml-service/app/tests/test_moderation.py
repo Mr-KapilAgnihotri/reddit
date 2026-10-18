@@ -110,7 +110,21 @@ class TestEdgeCases:
 
     def test_return_schema_keys(self):
         result = process_text(_make())
-        assert set(result.keys()) == {"postId", "originalText", "maskedText", "isModerated"}
+        assert {"postId", "originalText", "maskedText", "isModerated",
+                "categories", "severity", "reason", "provider"} <= set(result.keys())
+        # maskedTitle is only present when a title was supplied
+        assert "maskedTitle" not in result
+
+    def test_title_is_masked_too(self):
+        result = process_text({"postId": 1, "title": "fuck this", "text": "clean body"})
+        assert result["isModerated"] is True
+        assert "fuck" not in result["maskedTitle"].lower()
+        assert result["maskedText"] == "clean body"
+
+    def test_profanity_category_reported(self):
+        result = process_text(_make(text="What the fuck"))
+        assert "profanity" in result["categories"]
+        assert result["provider"] == "profanity-filter"
 
     def test_missing_post_id_is_none(self):
         result = process_text({"text": "hello"})

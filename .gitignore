@@ -4,5 +4,6 @@ ml-service/venv/
 venv/
 *.pyc
 __pycache__/
-howtorun.txt
-.gitignore
+.env
+.transfer/
+*.log

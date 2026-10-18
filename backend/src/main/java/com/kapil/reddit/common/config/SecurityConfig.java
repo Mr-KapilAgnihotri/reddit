@@ -32,6 +32,12 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/error").permitAll()
+                        // Public health probe + the static frontend (src/main/resources/static)
+                        .requestMatchers("/api/health").permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET,
+                                "/", "/index.html", "/app.js", "/styles.css", "/favicon.ico").permitAll()
+                        // Uploaded post images (UUID names) are public like the posts showing them
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/media/*").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/users").permitAll()
                         // ── Admin endpoints (defence-in-depth: URL + @PreAuthorize) ──
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
@@ -39,17 +45,21 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/users/*/profile").permitAll()
                         .requestMatchers("/api/users/me/**").authenticated()
                         .requestMatchers("/api/users/**").authenticated()
+                        // Browsing communities is public (Reddit-style); joining/creating needs login
+                        .requestMatchers(org.springframework.http.HttpMethod.GET,
+                                "/api/communities", "/api/communities/*", "/api/communities/*/posts").permitAll()
                         .requestMatchers("/api/communities/**").authenticated()
                         // ── Public read access (Reddit-style: no login required to browse) ──
                         // Comment tree — unauthenticated callers get userVote=0
+                        // BUG FIX: must come BEFORE "/api/posts/*" — otherwise the wildcard matched
+                        // first, the request ran anonymously and authentication.getName() threw an NPE.
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/recommended").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*/comments").permitAll()
                         // Global feed, community feed, user posts, single post — all public
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/global").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/community/**").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/user/**").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/*").permitAll()
-                        // ── Recommendation feed requires authentication ──
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/posts/recommended").authenticated()
                         // ── All writes (POST, PUT, DELETE) require authentication ──
                         .requestMatchers("/api/comments/**").authenticated()
                         .requestMatchers("/api/posts/**").authenticated()

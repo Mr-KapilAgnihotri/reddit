@@ -82,6 +82,16 @@ public class AuthController {
     }
 
     /**
+     * {@code POST /verify?token=...} without a JSON body (curl, PowerShell's Invoke-RestMethod,
+     * HTML forms). The JSON variant above would reject these with 415 Unsupported Media Type.
+     */
+    @PostMapping(value = "/verify", consumes = "!application/json")
+    public ResponseEntity<Map<String, String>> verifyEmailPostWithoutJson(@RequestParam String token) {
+        emailVerificationService.verifyEmail(resolveVerificationToken(token, null));
+        return ResponseEntity.ok(Map.of("message", "Email verified successfully"));
+    }
+
+    /**
      * Initiates a password reset for the given email address.
      *
      * <p>Always returns HTTP 200 regardless of whether the email is registered —

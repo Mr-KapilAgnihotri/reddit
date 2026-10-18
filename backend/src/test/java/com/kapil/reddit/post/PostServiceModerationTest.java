@@ -18,10 +18,18 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.kapil.reddit.common.exception.BusinessException;
+import com.kapil.reddit.post.dto.CreatePostRequest;
+import com.kapil.reddit.post.dto.PostResponse;
+import com.kapil.reddit.post.event.EmbeddingEvent;
+import com.kapil.reddit.user.domain.User;
+
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -172,5 +180,141 @@ class PostServiceModerationTest {
         postService.handleModerationResult(event);
 
         verify(postRepository, times(2)).save(any());
+    }
+
+    // ── handleModerationResult — maskedTitle ─────────────────────────────────
+
+    @Test
+    void handleModerationResult_appliesMaskedTitle() {
+        existingPost.setTitle("damn title");
+        when(postRepository.findById(1L)).thenReturn(Optional.of(existingPost));
+        when(postRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ModerationResultEvent event = buildEvent(1L, "****", true);
+        event.setMaskedTitle("**** title");
+        postService.handleModerationResult(event);
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postRepository).save(captor.capture());
+        assertThat(captor.getValue().getTitle()).isEqualTo("**** title");
+    }
+
+    @Test
+    void handleModerationResult_nullOrBlankMaskedTitle_keepsTitle() {
+        existingPost.setTitle("original title");
+        when(postRepository.findById(1L)).thenReturn(Optional.of(existingPost));
+        when(postRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ModerationResultEvent noTitle = buildEvent(1L, "text", false);
+        ModerationResultEvent blankTitle = buildEvent(1L, "text", false);
+        blankTitle.setMaskedTitle("   ");
+        postService.handleModerationResult(noTitle);
+        postService.handleModerationResult(blankTitle);
+
+        assertThat(existingPost.getTitle()).isEqualTo("original title");
+    }
+
+    // ── storeEmbedding ───────────────────────────────────────────────────────
+
+    private EmbeddingEvent buildEmbedding(Long postId, List<Float> values) {
+        EmbeddingEvent e = new EmbeddingEvent();
+        e.setPostId(postId);
+        e.setEmbedding(values);
+        return e;
+    }
+
+    @Test
+    void storeEmbedding_convertsListToFloatArray() {
+        when(postRepository.findById(1L)).thenReturn(Optional.of(existingPost));
+        when(postRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        postService.storeEmbedding(buildEmbedding(1L, List.of(0.5f, -0.25f, 1.0f)));
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postRepository).save(captor.capture());
+        assertThat(captor.getValue().getEmbedding()).containsExactly(0.5f, -0.25f, 1.0f);
+    }
+
+    @Test
+    void storeEmbedding_postNotFound_doesNotSave() {
+        when(postRepository.findById(404L)).thenReturn(Optional.empty());
+
+        postService.storeEmbedding(buildEmbedding(404L, List.of(0.1f)));
+
+        verify(postRepository, never()).save(any());
+    }
+
+    @Test
+    void storeEmbedding_invalidEvent_isIgnored() {
+        postService.storeEmbedding(null);
+        postService.storeEmbedding(buildEmbedding(null, List.of(0.1f)));
+        postService.storeEmbedding(buildEmbedding(1L, null));
+
+        verifyNoInteractions(postRepository);
+    }
+
+    // ── createPost → Kafka ───────────────────────────────────────────────────
+
+    @Test
+    void createPost_withoutActiveTransaction_publishesEventImmediately() {
+        User author = new User();
+        author.setId(5L);
+        author.setUsername("alice");
+        when(userRepository.findByEmail("alice@test.com")).thenReturn(Optional.of(author));
+        when(postRepository.save(any())).thenAnswer(inv -> {
+            Post p = inv.getArgument(0);
+            p.setId(42L);
+            return p;
+        });
+
+        CreatePostRequest request = new CreatePostRequest();
+        request.setTitle("hello");
+        request.setText("what the fuck is this");
+
+        PostResponse response = postService.createPost("alice@test.com", request);
+
+        ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+        verify(postProducer).sendPostCreatedEvent(captor.capture());
+        assertThat(captor.getValue().getId()).isEqualTo(42L);
+        assertThat(captor.getValue().getOriginalText()).isEqualTo("what the fuck is this");
+        // Masking happens asynchronously — the immediate response is unmoderated
+        assertThat(response.getModerated()).isFalse();
+        assertThat(response.getText()).isEqualTo("what the fuck is this");
+    }
+
+    @Test
+    void createPost_unknownUser_doesNotPublish() {
+        when(userRepository.findByEmail("ghost@test.com")).thenReturn(Optional.empty());
+
+        CreatePostRequest request = new CreatePostRequest();
+        request.setText("text");
+
+        assertThatThrownBy(() -> postService.createPost("ghost@test.com", request))
+                .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(postProducer);
+    }
+
+    // ── cache "unless" helpers (moderation window) ───────────────────────────
+
+    private static PostResponse responseCreatedAt(Instant createdAt) {
+        return PostResponse.builder().id(1L).createdAt(createdAt).build();
+    }
+
+    @Test
+    void isUnsettled_newPost_true_oldPost_false() {
+        assertThat(PostService.isUnsettled(responseCreatedAt(Instant.now()))).isTrue();
+        assertThat(PostService.isUnsettled(responseCreatedAt(
+                Instant.now().minus(PostService.MODERATION_WINDOW).minusSeconds(1)))).isFalse();
+        assertThat(PostService.isUnsettled(responseCreatedAt(null))).isTrue();
+    }
+
+    @Test
+    void hasUnsettled_trueWhenAnyPostOnPageIsNew() {
+        PostResponse old = responseCreatedAt(Instant.now().minusSeconds(3600));
+        PostResponse fresh = responseCreatedAt(Instant.now());
+
+        assertThat(PostService.hasUnsettled(new org.springframework.data.domain.PageImpl<>(List.of(old)))).isFalse();
+        assertThat(PostService.hasUnsettled(new org.springframework.data.domain.PageImpl<>(List.of(old, fresh)))).isTrue();
+        assertThat(PostService.hasUnsettled(org.springframework.data.domain.Page.empty())).isFalse();
     }
 }

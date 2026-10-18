@@ -7,7 +7,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
@@ -31,7 +30,7 @@ import org.testcontainers.utility.DockerImageName;
 @Testcontainers(disabledWithoutDocker = true)
 @EmbeddedKafka(
         partitions = 1,
-        topics = {"post-created", "post-moderated"},
+        topics = {"post-created", "post-moderated", "post-embedding"},
         brokerProperties = {
                 "listeners=PLAINTEXT://localhost:${spring.embedded.kafka.brokers.property:0}",
                 "log.dir=/tmp/kafka-test-logs"
@@ -39,14 +38,24 @@ import org.testcontainers.utility.DockerImageName;
 )
 public abstract class AbstractIntegrationTest {
 
-    @Container
+    // Singleton containers: started once per JVM and never stopped between test classes.
+    // With per-class @Container fields, Testcontainers stopped Postgres/Redis after each IT
+    // class while Spring's context cache kept handing the next class a context still wired
+    // to the old (dead) ports → "Connection refused" in whichever IT ran second.
+    // Ryuk removes the containers when the JVM exits.
     protected static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>(DockerImageName.parse("pgvector/pgvector:pg16"));
 
-    @Container
     protected static final GenericContainer<?> REDIS =
             new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
                     .withExposedPorts(6379);
+
+    static {
+        if (org.testcontainers.DockerClientFactory.instance().isDockerAvailable()) {
+            POSTGRES.start();
+            REDIS.start();
+        }
+    }
 
     @DynamicPropertySource
     static void registerInfrastructure(DynamicPropertyRegistry registry) {

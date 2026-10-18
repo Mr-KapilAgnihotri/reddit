@@ -17,6 +17,11 @@ public class CommentMapper {
      * @param children  pre-built list of child CommentResponses (sorted, recursive)
      */
     public static CommentResponse toResponse(Comment comment, Short userVote, List<CommentResponse> children) {
+        return toResponse(comment, userVote, children, false);
+    }
+
+    public static CommentResponse toResponse(Comment comment, Short userVote, List<CommentResponse> children,
+                                             boolean canDelete) {
         boolean deleted = Boolean.TRUE.equals(comment.getIsDeleted());
 
         return CommentResponse.builder()
@@ -31,6 +36,7 @@ public class CommentMapper {
                 .userVote(userVote != null ? userVote : 0)
                 .isDeleted(deleted)
                 .children(children)
+                .canDelete(!deleted && canDelete)
                 .build();
     }
 }

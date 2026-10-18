@@ -10,6 +10,10 @@ import com.kapil.reddit.community.repository.CommunityRepository;
 import com.kapil.reddit.user.domain.User;
 import com.kapil.reddit.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.transaction.annotation.Transactional;
+import com.kapil.reddit.post.repository.PostRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -23,7 +27,10 @@ public class CommunityService {
     private final UserRepository userRepository;
     private final CommunityMemberRepository communityMemberRepository;
     private final CommunityModeratorRepository communityModeratorRepository;
+    private final PostRepository postRepository;
 
+    // The home feed is cached per user and built from their memberships.
+    @CacheEvict(value = "homeFeed", allEntries = true)
     public CommunityResponse createCommunity(String email, CreateCommunityRequest request) {
 
         if (communityRepository.existsByName(request.getName())) {
@@ -83,6 +90,8 @@ public class CommunityService {
                 .toList();
     }
 
+    // The home feed is cached per user and built from their memberships.
+    @CacheEvict(value = "homeFeed", allEntries = true)
     public void joinCommunity(Long communityId, String email) {
 
         User user = userRepository.findByEmail(email)
@@ -130,6 +139,8 @@ public class CommunityService {
         communityModeratorRepository.save(moderator);
     }
 
+    // The home feed is cached per user and built from their memberships.
+    @CacheEvict(value = "homeFeed", allEntries = true)
     public void leaveCommunity(Long communityId, String email) {
 
         User user = userRepository.findByEmail(email)
@@ -164,6 +175,15 @@ public class CommunityService {
         communityModeratorRepository.deleteById(id);
     }
 
+    // Its posts disappear from every feed and post page, so evict those caches too.
+    @Caching(evict = {
+            @CacheEvict(value = "homeFeed",   allEntries = true),
+            @CacheEvict(value = "globalFeed", allEntries = true),
+            @CacheEvict(value = "postDetail", allEntries = true)
+    })
+    // BUG FIX: without a transaction the derived deleteAllByCommunityId(...) calls below threw
+    // TransactionRequiredException, so deleting a community always failed with a 500.
+    @Transactional
     public void deleteCommunity(Long id, String email) {
 
         Community community = communityRepository.findById(id)
@@ -182,8 +202,13 @@ public class CommunityService {
             throw new BusinessException("Only owner or admin can delete community");
         }
 
+        if (Boolean.TRUE.equals(community.getIsDeleted())) {
+            throw new BusinessException("Community not found");
+        }
+
         community.setIsDeleted(true);
         communityRepository.save(community);
+        postRepository.softDeleteByCommunityId(id);
         communityMemberRepository.deleteAllByCommunityId(id);
         communityModeratorRepository.deleteAllByCommunityId(id);
     }

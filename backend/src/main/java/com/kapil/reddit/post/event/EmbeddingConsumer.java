@@ -24,9 +24,9 @@ public class EmbeddingConsumer {
     @KafkaListener(
             topics = "post-embedding",
             groupId = "embedding-consumer-group",
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "embeddingListenerContainerFactory"
     )
-    public void onEmbeddingReceived(EmbeddingEvent event) {
+    public void onEmbeddingReceived(@org.springframework.messaging.handler.annotation.Payload(required = false) EmbeddingEvent event) {
         if (event == null || event.getPostId() == null || event.getEmbedding() == null) {
             log.warn("EmbeddingConsumer: received null or incomplete event — skipping");
             return;

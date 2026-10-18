@@ -42,6 +42,7 @@ public class CommentService {
     private final CommentVoteRepository commentVoteRepository;
     private final PostRepository postRepository;
     private final UserRepository userRepository;
+    private final com.kapil.reddit.common.security.ContentAccess contentAccess;
 
     // ========================= CREATE COMMENT =========================
 
@@ -63,6 +64,9 @@ public class CommentService {
 
         Post post = postRepository.findById(request.getPostId())
                 .orElseThrow(() -> new BusinessException("Post not found"));
+        if (Boolean.TRUE.equals(post.getIsDeleted())) {
+            throw new BusinessException("Post not found");
+        }
 
         Comment parentComment = null;
         if (request.getParentCommentId() != null) {
@@ -97,7 +101,7 @@ public class CommentService {
         post.setCommentCount(post.getCommentCount() + 1);
         postRepository.save(post);
 
-        return CommentMapper.toResponse(saved, (short) 0, List.of());
+        return CommentMapper.toResponse(saved, (short) 0, List.of(), true); // author can delete
     }
 
     // ========================= GET COMMENT TREE =========================
@@ -130,9 +134,10 @@ public class CommentService {
     @Transactional(readOnly = true)
     public Page<CommentResponse> getCommentsForPost(Long postId, String email, int page, int size, String sort) {
 
-        if (!postRepository.existsById(postId)) {
-            throw new BusinessException("Post not found");
-        }
+        Post post = postRepository.findById(postId)
+                .orElseThrow(() -> new BusinessException("Post not found"));
+        Long communityId = post.getCommunity() != null ? post.getCommunity().getId() : null;
+        com.kapil.reddit.common.security.ContentAccess.Viewer viewer = contentAccess.viewer(email);
 
         Pageable pageable = PageRequest.of(page, size);
 
@@ -167,7 +172,7 @@ public class CommentService {
 
         // Convert each root on the requested page to a recursive CommentResponse
         List<CommentResponse> rootResponses = rootPage.getContent().stream()
-                .map(root -> buildTree(root, childrenMap, voteMap, new HashSet<>()))
+                .map(root -> buildTree(root, childrenMap, voteMap, new HashSet<>(), viewer, communityId))
                 .collect(Collectors.toList());
 
         return new PageImpl<>(rootResponses, pageable, rootPage.getTotalElements());
@@ -186,11 +191,14 @@ public class CommentService {
             Comment comment,
             Map<Long, List<Comment>> childrenMap,
             Map<Long, Short> voteMap,
-            Set<Long> visited) {
+            Set<Long> visited,
+            com.kapil.reddit.common.security.ContentAccess.Viewer viewer,
+            Long communityId) {
 
+        boolean canDelete = viewer.canRemove(comment.getAuthor().getId(), communityId);
         if (visited.contains(comment.getId())) {
             // Defensive: should never happen with clean data, but prevents infinite recursion
-            return CommentMapper.toResponse(comment, voteMap.getOrDefault(comment.getId(), (short) 0), List.of());
+            return CommentMapper.toResponse(comment, voteMap.getOrDefault(comment.getId(), (short) 0), List.of(), canDelete);
         }
         visited.add(comment.getId());
 
@@ -198,12 +206,12 @@ public class CommentService {
 
         // Children are already sorted by createdAt ASC (ORDER BY in the repository query)
         List<CommentResponse> childResponses = children.stream()
-                .map(child -> buildTree(child, childrenMap, voteMap, visited))
+                .map(child -> buildTree(child, childrenMap, voteMap, visited, viewer, communityId))
                 .collect(Collectors.toList());
 
         Short userVote = voteMap.getOrDefault(comment.getId(), (short) 0);
 
-        return CommentMapper.toResponse(comment, userVote, childResponses);
+        return CommentMapper.toResponse(comment, userVote, childResponses, canDelete);
     }
 
     /**
@@ -359,8 +367,9 @@ public class CommentService {
         Comment comment = commentRepository.findById(commentId)
                 .orElseThrow(() -> new BusinessException("Comment not found"));
 
-        if (!comment.getAuthor().getId().equals(user.getId())) {
-            throw new BusinessException("Only the author can delete this comment");
+        Long communityId = comment.getPost().getCommunity() != null ? comment.getPost().getCommunity().getId() : null;
+        if (!contentAccess.viewer(user).canRemove(comment.getAuthor().getId(), communityId)) {
+            throw new BusinessException("Only the author, a community moderator or an admin can delete this comment");
         }
 
         if (Boolean.TRUE.equals(comment.getIsDeleted())) {

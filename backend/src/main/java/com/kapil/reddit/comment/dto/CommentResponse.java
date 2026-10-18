@@ -38,6 +38,9 @@ public class CommentResponse {
 
     private Boolean isDeleted;
 
+    /** True when the requesting user may delete it (author, community owner/mod, admin). */
+    private Boolean canDelete;
+
     /** Nested child comments sorted by createdAt ASC. Empty list if leaf. */
     private List<CommentResponse> children;
 }

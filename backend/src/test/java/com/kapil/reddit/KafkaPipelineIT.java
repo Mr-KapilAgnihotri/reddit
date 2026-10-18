@@ -9,10 +9,12 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
@@ -56,6 +58,12 @@ class KafkaPipelineIT extends AbstractIntegrationTest {
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
         return new DefaultKafkaConsumerFactory<String, String>(props).createConsumer();
+    }
+
+    private KafkaTemplate<String, String> rawStringTemplate() {
+        return new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(
+                KafkaTestUtils.producerProps(embeddedKafkaBroker),
+                new StringSerializer(), new StringSerializer()));
     }
 
     // ── Topic: post-created ───────────────────────────────────────────────────
@@ -110,8 +118,10 @@ class KafkaPipelineIT extends AbstractIntegrationTest {
         result.setMaskedText("cleaned text");
         result.setModerated(false);
 
+        // Send the raw JSON string (like the Python producer). Going through the
+        // JsonSerializer-backed kafkaTemplate would double-encode it as a JSON string literal.
         String json = objectMapper.writeValueAsString(result);
-        kafkaTemplate.send("post-moderated", json).get();
+        rawStringTemplate().send("post-moderated", json).get();
 
         // Allow the @KafkaListener time to process; it will log "post not found" warning —
         // acceptable because postId=999 doesn't exist in the test DB.
@@ -123,7 +133,7 @@ class KafkaPipelineIT extends AbstractIntegrationTest {
 
     @Test
     void consumer_doesNotCrashOnInvalidJson() throws Exception {
-        kafkaTemplate.send("post-moderated", "NOT VALID JSON AT ALL").get();
+        rawStringTemplate().send("post-moderated", "NOT VALID JSON AT ALL").get();
         Thread.sleep(2000);
         // Success = consumer thread still alive — verified by no timeout/exception
     }

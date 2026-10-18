@@ -10,4 +10,10 @@ public class HealthController {
     public String health(){
         return "Security installed and running fine";
     }
+
+    /** Public liveness probe used by the Docker Compose healthcheck and the frontend. */
+    @GetMapping("/api/health")
+    public java.util.Map<String, String> publicHealth() {
+        return java.util.Map.of("status", "UP");
+    }
 }

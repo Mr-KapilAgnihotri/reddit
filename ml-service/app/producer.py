@@ -1,84 +1,58 @@
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
+"""Kafka producer for moderation results and embeddings."""
+from __future__ import annotations
+
 import json
 import logging
+import threading
+from typing import Optional
 
-from app.config import KAFKA_BOOTSTRAP, RESULT_TOPIC
+from kafka import KafkaProducer
+from kafka.errors import KafkaError
+
+from app.config import EMBEDDING_TOPIC, KAFKA_BOOTSTRAP, RESULT_TOPIC
 
 logger = logging.getLogger(__name__)
 
-# Module-level producer, created lazily on first use so that import-time
-# errors (Kafka not yet available) never crash the process.
-_producer: KafkaProducer | None = None
+_producer: Optional[KafkaProducer] = None
+_lock = threading.Lock()
 
 
 def _get_producer() -> KafkaProducer:
+    """Create the producer lazily so a missing broker never crashes import."""
     global _producer
-    if _producer is None:
-        logger.info("Creating KafkaProducer — broker=%s", KAFKA_BOOTSTRAP)
-        _producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BOOTSTRAP,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            retries=5,
-            acks="all",
-        )
+    with _lock:
+        if _producer is None:
+            logger.info("Creating KafkaProducer — broker=%s", KAFKA_BOOTSTRAP)
+            _producer = KafkaProducer(
+                bootstrap_servers=KAFKA_BOOTSTRAP,
+                key_serializer=lambda k: str(k).encode("utf-8") if k is not None else None,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                retries=5,
+                acks="all",
+            )
     return _producer
 
 
-def send_result(result: dict) -> None:
-    """
-    Publish a moderation result to the ``post-moderated`` Kafka topic.
-
-    Expected schema:
-        {
-            "postId": int,
-            "originalText": str,
-            "maskedText": str,
-            "isModerated": bool
-        }
-
-    Errors are logged but never propagated so the consumer loop keeps running.
-    """
+def _send(topic: str, payload: dict) -> bool:
+    post_id = payload.get("postId")
     try:
-        producer = _get_producer()
-        future = producer.send(RESULT_TOPIC, result)
-        # Block for up to 10 s to confirm delivery; raises on timeout/error
-        record_metadata = future.get(timeout=10)
-        logger.info(
-            "📤 Sent to '%s' | partition=%d offset=%d | postId=%s",
-            RESULT_TOPIC,
-            record_metadata.partition,
-            record_metadata.offset,
-            result.get("postId"),
-        )
+        future = _get_producer().send(topic, key=post_id, value=payload)
+        meta = future.get(timeout=10)
+        logger.info("Sent to '%s' | partition=%d offset=%d | postId=%s",
+                    topic, meta.partition, meta.offset, post_id)
+        return True
     except KafkaError as exc:
-        logger.error("Failed to send result to Kafka for postId=%s: %s", result.get("postId"), exc)
+        logger.error("Failed to send to '%s' for postId=%s: %s", topic, post_id, exc)
     except Exception as exc:
-        logger.exception("Unexpected error sending result for postId=%s: %s", result.get("postId"), exc)
+        logger.exception("Unexpected error sending to '%s' for postId=%s: %s", topic, post_id, exc)
+    return False
 
-def send_embedding(result: dict) -> None:
-    """
-    Publish a generated text embedding to the ``post-embedding`` Kafka topic.
 
-    Expected schema:
-        {
-            "postId": int,
-            "embedding": list[float]
-        }
-    """
-    from app.config import EMBEDDING_TOPIC
-    try:
-        producer = _get_producer()
-        future = producer.send(EMBEDDING_TOPIC, result)
-        record_metadata = future.get(timeout=10)
-        logger.info(
-            "📤 Sent to '%s' | partition=%d offset=%d | postId=%s",
-            EMBEDDING_TOPIC,
-            record_metadata.partition,
-            record_metadata.offset,
-            result.get("postId"),
-        )
-    except KafkaError as exc:
-        logger.error("Failed to send embedding to Kafka for postId=%s: %s", result.get("postId"), exc)
-    except Exception as exc:
-        logger.exception("Unexpected error sending embedding for postId=%s: %s", result.get("postId"), exc)
+def send_result(result: dict) -> bool:
+    """Publish a moderation result to ``post-moderated``."""
+    return _send(RESULT_TOPIC, result)
+
+
+def send_embedding(payload: dict) -> bool:
+    """Publish ``{"postId": int, "embedding": [384 floats]}`` to ``post-embedding``."""
+    return _send(EMBEDDING_TOPIC, payload)

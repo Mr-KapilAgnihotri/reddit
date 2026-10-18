@@ -3,6 +3,9 @@ package com.kapil.reddit.post.domain;
 import com.kapil.reddit.community.domain.Community;
 import com.kapil.reddit.user.domain.User;
 import jakarta.persistence.*;
+import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.*;
 
 import java.time.Instant;
@@ -10,6 +13,10 @@ import java.util.List;
 
 @Entity
 @Table(name = "posts")
+// UPDATE only the columns that changed: posts are written concurrently by the API (votes,
+// comment counts) and the Kafka consumers (moderation, embedding); full-row updates from a
+// stale entity would silently revert the other writer's columns.
+@DynamicUpdate
 @Getter
 @Setter
 @Builder
@@ -65,6 +72,11 @@ public class Post {
      * columnDefinition="vector(384)" prevents Hibernate from generating
      * incompatible DDL on schema validation.
      */
+    // BUG FIX: a plain float[] is bound as a SQL ARRAY; PostgreSQL could cast it on
+    // write but reading a vector column back into float[] failed, breaking every feed
+    // once embeddings existed. hibernate-vector's VECTOR type handles both directions.
+    @JdbcTypeCode(SqlTypes.VECTOR)
+    @org.hibernate.annotations.Array(length = 384)
     @Column(name = "embedding", columnDefinition = "vector(384)")
     private float[] embedding;
 }

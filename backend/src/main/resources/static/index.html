@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threadly — Reddit clone</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">▲ <span>Threadly</span></div>
+    <nav class="tabs">
+      <button data-view="feed" class="tab active">Global feed</button>
+      <button data-view="home" class="tab auth-only">Home</button>
+      <button data-view="communities" class="tab">Communities</button>
+    </nav>
+    <div class="session">
+      <span id="whoami" class="muted"></span>
+      <button id="logoutBtn" class="ghost auth-only">Log out</button>
+      <button id="loginOpen" class="primary anon-only">Log in / Sign up</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="column">
+      <!-- Community page header (#/r/<name>) -->
+      <div id="communityHeader" class="hidden"></div>
+
+      <!-- Composer -->
+      <form id="composer" class="card auth-only">
+        <h3>Create a post</h3>
+        <input id="postTitle" placeholder="Title" maxlength="300" required>
+        <textarea id="postText" rows="3" placeholder="What's on your mind? (posts are moderated automatically)"></textarea>
+        <div id="imagePreview" class="image-preview"></div>
+        <div class="row composer-tools">
+          <label class="ghost file-btn">🖼 Add images
+            <input id="postImages" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+          </label>
+          <span class="hint" id="imgHint"></span>
+        </div>
+        <div class="row">
+          <select id="postCommunity"><option value="">No community (profile post)</option></select>
+          <button class="primary" type="submit">Post</button>
+        </div>
+        <p class="hint">Pipeline: Spring Boot → Kafka <code>post-created</code> → ML moderation → Kafka <code>post-moderated</code> → PostgreSQL</p>
+      </form>
+
+      <div class="feed-head">
+        <h2 id="feedTitle">Global feed</h2>
+        <select id="sortSel"><option value="new">New</option><option value="top">Top</option><option value="hot">Hot</option></select>
+      </div>
+      <div id="feed"></div>
+
+      <div id="communitiesView" class="hidden">
+        <form id="communityForm" class="card auth-only">
+          <h3>Create a community</h3>
+          <div class="row">
+            <input id="communityName" placeholder="name (e.g. springboot)" required>
+            <input id="communityDesc" placeholder="description">
+            <button class="primary" type="submit">Create</button>
+          </div>
+        </form>
+        <div id="communityList"></div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <div class="card">
+        <h3>System status</h3>
+        <ul class="status">
+          <li>Backend API <span id="stApi" class="pill">…</span></li>
+          <li>ML service <span id="stMl" class="pill">…</span></li>
+        </ul>
+        <p class="hint" id="mlInfo"></p>
+      </div>
+      <div class="card">
+        <h3>How moderation works</h3>
+        <p class="hint">A new post is shown immediately. Within a few seconds the ML service masks
+          inappropriate words and the post gets a <span class="badge">moderated</span> badge.
+          With a Groq API key it also detects hate, harassment and spam using an LLM.</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Auth dialog -->
+  <dialog id="authDialog">
+    <form method="dialog" class="dialog-body" id="authForm">
+      <h3 id="authTitle">Log in</h3>
+      <input id="authUsername" placeholder="username" class="signup-only">
+      <input id="authEmail" type="email" placeholder="email" required>
+      <input id="authPassword" type="password" placeholder="password" required>
+      <p id="authError" class="error"></p>
+      <div class="row">
+        <button type="button" id="authToggle" class="ghost">Need an account? Sign up</button>
+        <button type="submit" id="authSubmit" class="primary">Log in</button>
+      </div>
+      <button type="button" id="authClose" class="close">✕</button>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

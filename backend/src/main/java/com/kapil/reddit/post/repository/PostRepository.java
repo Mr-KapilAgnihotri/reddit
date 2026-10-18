@@ -5,6 +5,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -78,5 +79,17 @@ public interface PostRepository extends JpaRepository<Post, Long> {
         /** Fetch posts by their IDs (used to gather reference embeddings). */
         @Query("SELECT p FROM Post p WHERE p.id IN :ids AND p.embedding IS NOT NULL")
         List<Post> findByIdInWithEmbedding(@Param("ids") List<Long> ids);
-}
 
+        /**
+         * Atomic view counter. Touches only view_count, so a concurrent writer (e.g. the
+         * Kafka moderation consumer) can't have its columns overwritten by a stale read.
+         */
+        @Modifying
+        @Query("UPDATE Post p SET p.viewCount = COALESCE(p.viewCount, 0) + 1 WHERE p.id = :id")
+        int incrementViewCount(@Param("id") Long id);
+
+        /** Soft-deletes every post of a community (used when the community itself is deleted). */
+        @Modifying
+        @Query("UPDATE Post p SET p.isDeleted = true, p.updatedAt = CURRENT_TIMESTAMP WHERE p.community.id = :communityId AND p.isDeleted = false")
+        int softDeleteByCommunityId(@Param("communityId") Long communityId);
+}

@@ -10,6 +10,10 @@ import java.util.List;
 public class PostMapper {
 
     public static PostResponse toResponse(Post post, List<PostMedia> mediaList, Short userVote) {
+        return toResponse(post, mediaList, userVote, false);
+    }
+
+    public static PostResponse toResponse(Post post, List<PostMedia> mediaList, Short userVote, boolean canDelete) {
 
         List<PostMediaResponse> media = mediaList != null ? mediaList.stream()
                 .map(m -> PostMediaResponse.builder()
@@ -36,6 +40,8 @@ public class PostMapper {
                 .createdAt(post.getCreatedAt())
                 .media(media)
                 .userVote(userVote != null ? userVote : 0)
+                .moderated(Boolean.TRUE.equals(post.getIsModerated()))
+                .canDelete(canDelete)
                 .build();
     }
 }

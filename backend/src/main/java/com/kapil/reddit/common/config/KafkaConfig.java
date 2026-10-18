@@ -1,5 +1,6 @@
 package com.kapil.reddit.common.config;
 
+import com.kapil.reddit.post.event.EmbeddingEvent;
 import com.kapil.reddit.post.event.ModerationResultEvent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -99,6 +100,36 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, ModerationResultEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
+
+    // ── Embedding consumer (post-embedding topic) ────────────────────────────
+    // BUG FIX: EmbeddingConsumer previously used kafkaListenerContainerFactory, whose
+    // deserializer is hard-wired to ModerationResultEvent, so every embedding message
+    // failed to convert. It now has its own factory typed to EmbeddingEvent.
+
+    @Bean
+    public ConsumerFactory<String, EmbeddingEvent> embeddingConsumerFactory() {
+        JsonDeserializer<EmbeddingEvent> jsonDeser = new JsonDeserializer<>(EmbeddingEvent.class);
+        jsonDeser.addTrustedPackages("*");
+        jsonDeser.setUseTypeHeaders(false);
+
+        Map<String, Object> config = new HashMap<>();
+        config.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(ConsumerConfig.GROUP_ID_CONFIG, "embedding-consumer-group");
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, autoOffsetReset);
+        config.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true);
+
+        return new DefaultKafkaConsumerFactory<>(config, new StringDeserializer(),
+                new ErrorHandlingDeserializer<>(jsonDeser));
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, EmbeddingEvent>
+    embeddingListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, EmbeddingEvent> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(embeddingConsumerFactory());
         return factory;
     }
 }

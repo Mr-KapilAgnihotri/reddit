@@ -1,4 +1,4 @@
-src/main/resources/application.properties
+
 HELP.md
 tasks.txt
 target/
@@ -35,3 +35,4 @@ build/
 
 ### VS Code ###
 .vscode/
+uploads/
